@@ -3374,9 +3374,2244 @@ paths:
                       realm_description:
                         type: string
                         description: |
+                          Present if `message` and `update_message_flags` are both present in
+                          `event_types`.
+
+                          A set of data structures describing the conversations containing
+                          the 50000 most recent unread messages the user has received.  This will usually
+                          contain every unread message the user has received, but clients should support
+                          users with even more unread messages (and not hardcode the number 50000).
+                        additionalProperties: false
+                        properties:
+                          count:
+                            type: integer
+                            description: |
+                              The total number of unread messages to display; this includes private
+                              and group private messages, as well as all messages to unmuted topics
+                              on unmuted streams.
+                          pms:
+                            type: array
+                            description: |
+                              An array of dictionaries where each entry contains details
+                              of unread private messages with a specific user.
+                            items:
+                              type: object
+                              description: |
+                                Object containing the details of a unread private
+                                message with a specific user.
+                              additionalProperties: false
+                              properties:
+                                sender_id:
+                                  type: integer
+                                  description: |
+                                    The user id of the other participant in a PM conversation.
+                                message_ids:
+                                  type: array
+                                  description: |
+                                    The message ids of the recent unread PM messages sent by the other user.
+                                  items:
+                                    type: integer
+                          streams:
+                            type: array
+                            description: |
+                              An array of dictionaries where each dictionary contains
+                              details of all unread messages of a single subscribed stream,
+                              including muted streams.
+                            items:
+                              type: object
+                              description: |
+                                `{message_id}`: Object containing the details of a unread stream
+                                message with the message_id as the key.
+                              additionalProperties: false
+                              properties:
+                                sender_ids:
+                                  type: array
+                                  items:
+                                    type: integer
+                                  description: |
+                                    Array containing the id of the users who have sent recent messages
+                                    on this stream under the given topic which have been unread by the user.
+                                topic:
+                                  type: string
+                                  description: |
+                                    The topic under which the message was sent.
+                                stream_id:
+                                  type: integer
+                                  description: |
+                                    The id of the stream to which the message was sent.
+                                unread_message_ids:
+                                  type: array
+                                  description: |
+                                    The message ids of the recent unread messages sent in this stream.
+                                  items:
+                                    type: integer
+                          huddles:
+                            type: array
+                            description: |
+                              An array of dictionaries where each dictionary contains
+                              details of all unread group private messages of a single
+                              group.
+                            items:
+                              type: object
+                              description: |
+                                Object containing the details of a unread group PM
+                                messages of a single group.
+                              additionalProperties: false
+                              properties:
+                                user_ids_string:
+                                  type: string
+                                  description: |
+                                    A string containing the ids of all users in the huddle(group PMs)
+                                    separated by commas(,). Example: "1,2,3".
+                                message_ids:
+                                  type: array
+                                  description: |
+                                    The message ids of the recent unread messages which have been sent in
+                                    this group.
+                                  items:
+                                    type: integer
+                          mentions:
+                            type: array
+                            description: |
+                              Array containing the ids of all messages in which the user has been mentioned.
+                              For muted streams, wildcard mentions will not be considered for this array.
+                            items:
+                              type: integer
+                          old_unreads_missing:
+                            type: boolean
+                            description: |
+                              True if this data set was truncated because the user has too many
+                              unread messages.  When truncation occurs, only the most recent
+                              `MAX_UNREAD_MESSAGES` (currently 50000) messages will be considered
+                              when forming this response.  When true, we recommend that clients
+                              display a warning, as they are likely to produce erroneous results
+                              until reloaded with the user having fewer than `MAX_UNREAD_MESSAGES`
+                              unread messages.
+
+                              **Changes**: New in Zulip 4.0 (feature level 44).
+                      starred_messages:
+                        type: array
+                        items:
+                          type: integer
+                        description: |
+                          Present if `starred_messages` is present in `fetch_event_types`.
+
+                          Array containing the ids of all messages which have been
+                          [starred](/help/star-a-message) by the user.
+                      streams:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BasicStream"
+                        description: |
+                          Present if `stream` is present in `fetch_event_types`.
+
+                          Array of dictionaries where each dictionary contains details about
+                          a single stream in the organization that is visible to the user.
+
+                          For organization administrators, this will include all private streams
+                          in the organization.
+                      realm_default_streams:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BasicStream"
+                        description: |
+                          Present if `default_streams` is present in `fetch_event_types`.
+
+                          An array of dictionaries where each dictionary contains details
+                          about a single [default stream](/help/set-default-streams-for-new-users)
+                          for the Zulip organization.
+                      realm_default_stream_groups:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/DefaultStreamGroup"
+                        description: |
+                          Present if `default_stream_groups` is present in `fetch_event_types`.
+
+                          An array of dictionaries where each dictionary contains details
+                          about a single default stream group configured for this
+                          Zulip organization.
+
+                          Default stream groups are an experimental feature.
+                      stop_words:
+                        type: array
+                        items:
+                          type: string
+                        description: |
+                          Present if `stop_words` is present in `fetch_event_types`.
+
+                          An array containing the stop words used by the Zulip server's
+                          full-text search implementation.  Useful for showing helpful
+                          error messages when a search returns limited results because
+                          a stop word in the query was ignored.
+                      user_status:
+                        type: object
+                        description: |
+                          Present if `user_status` is present in `fetch_event_types`.
+
+                          A dictionary which contains the [status](/help/status-and-availability)
+                          of all users in the Zulip organization who have set a status.
+                        additionalProperties:
+                          description: |
+                            `{user_id}`: Object containing the status details of a user
+                            with the key of the object being the id of the user.
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            away:
+                              type: boolean
+                              description: |
+                                Whether the user has marked themself "away".
+                            status_text:
+                              type: string
+                              description: |
+                                The text content of the status message.
+                      has_zoom_token:
+                        type: boolean
+                        description: |
+                          Present if `video_calls` is present in `fetch_event_types`.
+
+                          A boolean which signifies whether the user has a zoom token and has thus completed
+                          OAuth flow for the [Zoom integration](/help/start-a-call).  Clients need
+                          to know whether initiating Zoom OAuth is required before creating a Zoom call.
+                      giphy_api_key:
+                        type: string
+                        description: |
+                          Present if `giphy` is present in `fetch_event_types`.
+
+                          GIPHY's client-side SDKs needs this API key to use the GIPHY API.
+                          GIPHY API keys are not secret (their main purpose appears to be
+                          allowing GIPHY to block a problematic app).  Please don't use our API
+                          key for an app unrelated to Zulip.
+
+                          Developers of clients should also read the
+                          [GIPHY API TOS](https://support.giphy.com/hc/en-us/articles/360028134111-GIPHY-API-Terms-of-Service-)
+                          before using this API key.
+
+                          **Changes**: Added in Zulip 4.0 (feature level 47).
+                      enable_desktop_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_digest_emails:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_login_emails:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_marketing_emails:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_offline_email_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_offline_push_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_online_push_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_sounds:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_stream_desktop_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_stream_email_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_stream_push_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      enable_stream_audible_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      wildcard_mentions_notify:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      message_content_in_email_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      notification_sound:
+                        type: string
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      pm_content_in_desktop_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      desktop_icon_count_display:
+                        type: integer
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      realm_name_in_notifications:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      presence_enabled:
+                        type: boolean
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          The current value of this global notification setting for the user.
+                          See [update-notification-settings](/api/update-notification-settings)
+                          for details on notification settings.
+                      available_notification_sounds:
+                        type: array
+                        items:
+                          type: string
+                        description: |
+                          Present if `update_global_notifications` is present in `fetch_event_types`.
+
+                          Array containing the names of the notification sound options supported by
+                          this Zulip server.  Only relevant to support UI for configuring notification
+                          sounds.
+                      color_scheme:
+                        type: integer
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          The color scheme selected by the user.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      default_language:
+                        type: string
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          The default language chosen by the user.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      demote_inactive_streams:
+                        type: integer
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Whether the user has chosen to demote inactive streams.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      dense_mode:
+                        type: boolean
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Whether the user has switched on dense mode.  Dense mode is an experimental
+                          feature that is only available in development environments.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      emojiset:
+                        type: string
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          The name of the emojiset that the user has chosen.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      fluid_layout_width:
+                        type: boolean
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Whether the user has chosen for the layout width to be fluid.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      default_view:
+                        type: string
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          The [default view](/help/change-default-view) in Zulip, represented
+                          as the URL suffix after `#` to be rendered when Zulip loads.
+
+                          Currently supported values are `all_messages` and `recent_topics`.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      high_contrast_mode:
+                        type: boolean
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Whether has switched on high contrast mode.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      left_side_userlist:
+                        type: boolean
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Whether the user has chosen for the userlist to be displayed
+                          on the left side of the screen (for desktop app and web app) in narrow
+                          windows.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      starred_message_counts:
+                        type: boolean
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Whether the user has chosen the number of starred messages to
+                          be displayed similar to unread counts.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      timezone:
+                        type: string
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          The timezone configured for the user.  This is used primarily to display
+                          the user's timezone to other users.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      translate_emoticons:
+                        type: boolean
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Whether the user has chosen for emoticons to be translated into emoji
+                          in the Zulip compose box.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      twenty_four_hour_time:
+                        type: boolean
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Whether the user has chosen a twenty four hour time display (true)
+                          or a twelve hour one (false).
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                      emojiset_choices:
+                        description: |
+                          Present if `update_display_settings` is present in `fetch_event_types`.
+
+                          Array of dictionaries where each dictionary describes an emojiset
+                          supported by this version of the Zulip server.
+
+                          Only relevant to clients with configuration UI for choosing an emojiset;
+                          the currently selected emojiset is available in the `emojiset` key.
+
+                          See [PATCH /settings/display](/api/update-display-settings)
+                          for api details on display settings.
+                        type: array
+                        items:
+                          type: object
+                          description: |
+                            Object describing a emojiset.
+                          additionalProperties: false
+                          properties:
+                            key:
+                              type: string
+                              description: |
+                                The key or the name of the emojiset which will be the value
+                                of `emojiset` if this emojiset is chosen.
+                            text:
+                              type: string
+                              description: |
+                                The text describing the emojiset.
+                      realm_add_emoji_by_admins_only:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the organization is configured to only allow administrators
+                          to upload new custom emoji.
+                      realm_allow_edit_history:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether this organization is configured to allow users to access
+                          [message edit history](/help/view-a-messages-edit-history).
+                      realm_allow_message_deleting:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether messages can be deleted in this Zulip organization.
+                      realm_bot_creation_policy:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The policy for which users can create bot users in this organization.
+                      realm_create_stream_policy:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The policy for which users can create streams in this organization.
+                      realm_invite_to_stream_policy:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The policy for which users can add other users to streams in this
+                          organization.
+                      realm_wildcard_mention_policy:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The policy for who can use wildcard mentions in large streams.
+
+                          * 1 => Any user can use wildcard mentions in large streams.
+                          * 2 => Only members can use wildcard mentions in large streams.
+                          * 3 => Only full members can use wildcard mentions in large streams.
+                          * 4 => Only stream and organization administrators can use wildcard mentions in large streams.
+                          * 5 => Only organization administrators can use wildcard mentions in large streams.
+                          * 6 => Nobody can use wildcard mentions in large streams.
+                          * 7 => Only organization adminstartors and moderators can use wildcard mentions in large streams.
+
+                          All users will receive a warning/reminder when using
+                          mentions in large streams, even when permitted to do so.
+
+                          **Changes**: New in Zulip 4.0 (feature level 33). Moderators option added in
+                          Zulip 4.0 (feature level 62).
+                      realm_default_language:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The default UI language for new users joining this organization.
+                      realm_default_twenty_four_hour_time:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether new members of this organization will see times displayed in
+                          24-hour time (true) or 12-hour time (false).
+                      realm_description:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The description of the organization, used on login and registration pages.
+                      realm_digest_emails_enabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the organization has enabled [weekly digest emails](/help/digest-emails).
+                      realm_disallow_disposable_email_addresses:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the organization disallows disposable email
+                          addresses.
+                      realm_email_address_visibility:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The policy for which users in this organization can see the
+                          real email addresses of other users.
+
+                          * 1 = everyone
+                          * 2 = members only
+                          * 3 = administrators only
+                          * 4 = nobody (though note that administrators can change this setting).
+                          * 5 = moderators only
+                      realm_email_changes_disabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether users are allowed to change their own email address in this
+                          organization.  This is typically disabled for organizations that
+                          synchronize accounts from LDAP or a similar corporate database.
+                      realm_invite_required:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether an invitation is required to join this organization.
+                      realm_invite_to_realm_policy:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Policy for [who can invite new users](/help/invite-new-users#change-who-can-send-invitations)
+                          to join the organization:
+
+                          * 1 = Members only
+                          * 2 = Administrators only
+                          * 3 = Full members only
+                          * 4 = Moderators only
+
+                          **Changes**: New in Zulip 4.0 (feature level 50) replacing the
+                          previous `realm_invite_by_admins_only` boolean.
+                      realm_move_messages_between_streams_policy:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The policy for which users can move messages from one stream to another.
+
+                          * 1 = Members only
+                          * 2 = Administrators only
+                          * 3 = Full members only
+                          * 4 = Moderators only
+
+                          **Changes**: New in Zulip 4.0 (feature level 56)
+                      realm_inline_image_preview:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether this organization has been configured to enable
+                          [previews of linked images](/help/allow-image-link-previews).
+                      realm_inline_url_embed_preview:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether this organization has been configured to enable
+                          [previews of linked websites](/help/allow-image-link-previews).
+                      realm_mandatory_topics:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether [topics are required](/help/require-topics) for messages in this organization.
+                      realm_message_retention_days:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The default [message retention policy](/help/message-retention-policy)
+                          for this organization.  Pass `"forever"` to request that messages
+                          by retained forever (the default).
+                      realm_name:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The name of the organization, used in login pages etc.
+                      realm_name_changes_disabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Indicates whether users are
+                          [allowed to change](/help/restrict-name-and-email-changes) their name
+                          via the Zulip UI in this organization.  Typically disabled
+                          in organizations syncing this this type of account information
+                          an external user database like LDAP.
+                      realm_avatar_changes_disabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Indicates whether users are
+                          [allowed to change](/help/restrict-name-and-email-changes) their avatar
+                          via the Zulip UI in this organization.  Typically disabled
+                          in organizations syncing this this type of account information
+                          an external user database like LDAP.
+                      realm_emails_restricted_to_domains:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether [new users joining](/help/allow-anyone-to-join-without-an-invitation)
+                          this organization are required to have an email
+                          address in one of the `realm_domains` configured for the organization.
+                      realm_send_welcome_emails:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether or not this organization is configured to send the standard Zulip
+                          [welcome emails](/help/disable-welcome-emails) to new users joining the organization.
+                      realm_message_content_allowed_in_email_notifications:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether notification emails in this organization are allowed to
+                          contain Zulip the message content, or simply indicate that a new
+                          message was sent.
+                      realm_video_chat_provider:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The configured video call provider for the organization.
+                      realm_giphy_rating:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The configured GIPHY rating for the organization.
+
+                          **Changes**: New in Zulip 4.0 (feature level 55).
+                      realm_waiting_period_threshold:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Members whose accounts have been created at least this many days ago
+                          will be treated as [full members](/help/restrict-permissions-of-new-members)
+                          for the purpose of settings that restrict access to new members.
+                      realm_digest_weekday:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The day of the week when the organization will send
+                          its weekly digest email to inactive users.
+                      realm_private_message_policy:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Policy for [who can send private messages](/help/restrict-private-messages)
+                          in this organization.
+
+                          * 1 = Everyone
+                          * 2 = Nobody
+                      realm_user_group_edit_policy:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The organization's policy for [who can manage user groups
+                          ](/help/restrict-user-group-management).
+
+                          * 1 = All members can create and edit user groups
+                          * 2 = Only organization administrators can create and edit user groups
+                      realm_default_code_block_language:
+                        type: string
+                        nullable: true
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The default pygments language code to be used for a code blocks
+                          in this organization.  Null if no default has been set.
+                      realm_message_content_delete_limit_seconds:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Messages sent more than this many seconds ago cannot be deleted
+                          with this organization's
+                          [message deletion policy](/help/configure-message-editing-and-deletion).
+                      realm_authentication_methods:
+                        type: object
+                        additionalProperties:
+                          description: |
+                            Boolean describing whether the authentication method (i.e its key)
+                            is enabled in this organization.
+                          type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Dictionary of 'authentication_method_name': 'boolean' with each
+                          entry describing whether the authentication name can be used for
+                          authenticating into the organization.
+                      realm_allow_message_editing:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether this organizations [message edit policy](/help/configure-message-editing-and-deletion)
+                          allows editing the content of messages.
+                      realm_allow_community_topic_editing:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether [community topic editing](/help/community-topic-edits) is enabled
+                          in this organization.
+                      realm_message_content_edit_limit_seconds:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Messages sent more than this many seconds ago cannot be edited
+                          with this organization's
+                          [message edit policy](/help/configure-message-editing-and-deletion).
+                      realm_community_topic_editing_limit_seconds:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Messages sent more than this many seconds ago cannot have
+                          their topics edited by other users with this organization's
+                          [message edit policy](/help/configure-message-editing-and-deletion).
+
+                          **Changes**: New in Zulip 3.0 (feature level 11).  Previously this
+                          value was hardcoded to 86400 seconds (1 day).
+                      realm_icon_url:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The URL of the organization's [profile icon](/help/create-your-organization-profile).
+                      realm_icon_source:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          String indicating whether the organization's
+                          [profile icon](/help/create-your-organization-profile) was uploaded
+                          by a user or is the default.  Useful for UI allowing editing the organization's icon.
+
+                          * "G" means generated by Gravatar (the default).
+                          * "U" means uploaded by an organization administrator.
+                      max_icon_file_size_mib:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The maximum file size allowed for the organization's
+                          icon.  Useful for UI allowing editing the organization's icon.
+
+                          **Changes**: New in Zulip 5.0 (feature level 72).  Previously,
+                          this was called `max_icon_file_size`.
+                      realm_logo_url:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The URL of the organization's wide logo configured in the
+                          [organization profile](/help/create-your-organization-profile).
+                      realm_logo_source:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          String indicating whether the organization's
+                          [profile wide logo](/help/create-your-organization-profile) was uploaded
+                          by a user or is the default.  Useful for UI allowing editing the
+                          organization's wide logo.
+
+                          * "D" means the logo is the default Zulip logo.
+                          * "U" means uploaded by an organization administrator.
+                      realm_night_logo_url:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The URL of the organization's night theme wide-format logo configured in the
+                          [organization profile](/help/create-your-organization-profile).
+                      realm_night_logo_source:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          String indicating whether the organization's night theme
+                          [profile wide logo](/help/create-your-organization-profile) was uploaded
+                          by a user or is the default.  Useful for UI allowing editing the
+                          organization's wide logo.
+
+                          * "D" means the logo is the default Zulip logo.
+                          * "U" means uploaded by an organization administrator.
+                      max_logo_file_size_mib:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The maximum file size allowed for the uploaded organization logos.
+
+                          **Changes**: New in Zulip 5.0 (feature level 72).  Previously,
+                          this was called `max_logo_file_size`.
+                      realm_bot_domain:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The fake email domain that will be used for new bots created this
+                          organization.  Useful for UI for creating bots.
+                      realm_uri:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The URL for the organization.
+                      realm_available_video_chat_providers:
+                        type: object
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Dictionary where each entry describes a supported
+                          [video call provider](/help/start-a-call)
+                          that is configured on this server and could be selected by an
+                          organization administrator.
+
+                          Useful for administrative settings UI that allows changing the
+                          video call provider.
+                        additionalProperties:
+                          description: |
+                            `{provider_name}`: Dictionary containing the details of the
+                            video call provider with the name of the chat provider as
+                            the key.
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            name:
+                              type: string
+                              description: |
+                                The name of the video call provider.
+                            id:
+                              type: integer
+                              description: |
+                                The ID of the video call provider.
+                      realm_presence_disabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether online presence of other users is shown in this
+                          organization.
+                      settings_send_digest_emails:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether this Zulip server is configured to allow organizations to
+                          enable [digest emails](/help/digest-emails).
+
+                          Relevant for administrative settings UI that can change the digest
+                          email settings.
+                      realm_is_zephyr_mirror_realm:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the organization is a Zephyr mirror realm.
+                      realm_email_auth_enabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the organization has enabled Zulip's default email and password
+                          authentication feature.  Determines whether Zulip stores a password
+                          for the user and clients should offer any UI for changing the user's
+                          Zulip password.
+                      realm_password_auth_enabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the organization allows any sort of password-based
+                          authentication (whether via EmailAuthBackend or LDAP passwords).
+
+                          Determines whether a client might ever need to display a password prompt
+                          (clients will primarily look at this attribute in [server_settings](/api/get-server-settings)
+                          before presenting a login page).
+                      realm_push_notifications_enabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether push notifications are enabled for this organization.  Typically
+                          `false` for self-hosted servers that have not configured the
+                          [Mobile push notifications service](https://zulip.readthedocs.io/en/latest/production/mobile-push-notifications.html).
+                      realm_upload_quota_mib:
+                        type: integer
+                        nullable: true
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The total quota for uploaded files in this organization.
+
+                          Clients are not responsible for checking this quota; it is included
+                          in the API only for display purposes.
+
+                          Null if there is no limit.
+
+                          **Changes**: New in Zulip 5.0 (feature level 72).  Previously,
+                          this was called `realm_upload_quota`.
+                      realm_plan_type:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The plan type of the organization.
+
+                          * 1 = Self-hosted organization (SELF_HOSTED)
+                          * 2 = Zulip Cloud free plan (LIMITED)
+                          * 3 = Zulip Cloud Standard plan (STANDARD)
+                          * 4 = Zulip Cloud Standard plan, sponsored for free (STANDARD_FREE)
+                      zulip_plan_is_not_limited:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the organization is using a limited (Zulip Cloud Free) plan.
+                      upgrade_text_for_wide_organization_logo:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Text to use when displaying UI for wide organization logos, a feature
+                          that is currently not available on the Zulip Cloud Free plan.
+
+                          Useful only for clients supporting administrative UI for uploading
+                          a new wide organization logo to brand the organization.
+                      realm_default_external_accounts:
+                        type: object
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Dictionary where each entry describes a default external
+                          account type that can be configured with Zulip's custom
+                          profile fields feature.
+                        additionalProperties:
+                          description: |
+                            `{site_name}`: Dictionary containing the details of the
+                            default external account provider with the name of the
+                            website as the key.
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            name:
+                              type: string
+                              description: |
+                                The name of the external account provider
+                            text:
+                              type: string
+                              description: |
+                                The text describing the external account.
+                            hint:
+                              type: string
+                              description: |
+                                The help text to be displayed for the
+                                custom profile field in user-facing
+                                settings UI for configuring custom
+                                profile fields for this account.
+                            url_pattern:
+                              type: string
+                              description: |
+                                The regex pattern of the URL of a profile page
+                                on the external site.
+                      jitsi_server_url:
+                        type: string
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The base URL the organization uses to create Jitsi video calls.
+                      development_environment:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether this Zulip server is a development environment.  Used
+                          to control certain features or UI (such as error popups)
+                          that should only apply when connected to a Zulip development
+                          environment.
+                      server_generation:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          A timestamp indicating when the process hosting this
+                          event queue was started.  Clients will likely only find
+                          this value useful for inclusion in detailed error reports.
+                      password_min_length:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          This Zulip server's configured minimum required length for passwords.
+                          Necessary for password change UI to show whether the password
+                          will be accepted.
+                      password_min_guesses:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          This Zulip server's configured minimum `zxcvbn` minimum guesses.
+                          Necessary for password change UI to show whether the password
+                          will be accepted.
+                      giphy_rating_options:
+                        type: object
+                        description: |
+                          Dictionary where each entry describes a valid rating
+                          that is configured on this server and could be selected by an
+                          organization administrator.
+
+                          Useful for administrative settings UI that allows changing the
+                          allowed rating of GIFs.
+                        additionalProperties:
+                          description: |
+                            `{rating_name}`: Dictionary containing the details of the
+                            rating with the name of the rating as
+                            the key.
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            name:
+                              type: string
+                              description: |
+                                The description of the rating option.
+                            id:
+                              type: integer
+                              description: |
+                                The ID of the rating option.
+                      max_file_upload_size_mib:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The maximum file size that can be uploaded to this Zulip server.
+                      max_avatar_file_size_mib:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The maximum avatar size that can be uploaded to this Zulip server.
+                      server_inline_image_preview:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the server is configured with support for inline image previews.
+                          Clients containing administrative UI for changing
+                          `realm_inline_image_preview` should consult this field before offering
+                          that feature.
+                      server_inline_url_embed_preview:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the server is configured with support for inline URL previews.
+                          Clients containing administrative UI for changing
+                          `realm_inline_url_embed_preview` should consult this field before offering
+                          that feature.
+                      server_avatar_changes_disabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the server allows avatar changes.  Similar to
+                          `realm_avatar_changes_disabled` but based on the `AVATAR_CHANGES_DISABLED`
+                          Zulip server level setting.
+                      server_name_changes_disabled:
+                        type: boolean
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          Whether the server allows name changes.  Similar to
+                          `realm_name_changes_disabled` but based on the `NAME_CHANGES_DISABLED`
+                          Zulip server level setting.
+                      realm_notifications_stream_id:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The ID of the stream to which notifications announcing the
+                          creation of new streams are sent. -1 if such notifications are disabled.
+
+                          Since these notifications are sent by the server, this field is
+                          primarily relevant to clients containing UI for changing it.
+                      realm_signup_notifications_stream_id:
+                        type: integer
+                        description: |
+                          Present if `realm` is present in `fetch_event_types`.
+
+                          The ID of the stream to which notifications announcing
+                          that new users have joined the organization are sent.
+                          -1 if such notifications are disabled.
+
+                          Since these notifications are sent by the server, this field is
+                          primarily relevant to clients containing UI for changing it.
+                      realm_users:
+                        type: array
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          A array of dictionaries where each entry describes a user
+                          whose account has not been deactivated. Note that unlike
+                          the usual User dictionary, this does not contain the `is_active`
+                          key, as all the users present in this array have active accounts.
+
+                          See also `cross_realm_bots` and `realm_non_active_users`.
+                        items:
+                          $ref: "#/components/schemas/User"
+                      realm_non_active_users:
+                        type: array
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          A array of dictionaries where each entry describes a user
+                          whose account has been deactivated. Note that unlike
+                          the usual User dictionary this does not contain the `is_active`
+                          key as all the users present in this array have deactivated
+                          accounts.
+                        items:
+                          $ref: "#/components/schemas/User"
+                      avatar_source:
+                        type: string
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          The avatar data source type for the current user.
+
+                          Value values are `G` (gravatar) and `U` (uploaded by user).
+                      avatar_url_medium:
+                        type: string
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          The avatar URL for the current user at 500x500 resolution, appropriate
+                          for use in settings UI showing the user's avatar.
+                      avatar_url:
+                        type: string
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          The URL of the avatar for the current user at 100x100
+                          resolution.  See also `avatar_url_medium`.
+                      can_create_streams:
+                        type: boolean
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Whether the current user is allowed to create streams with
+                          the organization's [stream creation policy](/help/configure-who-can-create-streams).
+                      can_subscribe_other_users:
+                        type: boolean
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Whether the current user is allowed to subscribe other users to streams with
+                          the organization's [streams policy](/help/configure-who-can-invite-to-streams).
+                      can_invite_others_to_realm:
+                        type: boolean
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Whether the current user [is allowed to invite others]
+                          (/help/invite-new-users#change-who-can-send-invitations) to the organization.
+
+                          **Changes**: New in Zulip 4.0 (feature level 51).
+                      is_admin:
+                        type: boolean
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Whether the current user is an [organization administrator](/help/roles-and-permissions).
+                      is_owner:
+                        type: boolean
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Whether the current user is an [organization owner](/help/roles-and-permissions).
+                      is_moderator:
+                        type: boolean
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Whether the current user is an [organization moderator](/help/roles-and-permissions).
+
+                          **Changes**: New in Zulip 4.0 (feature level 60).
+                      is_guest:
+                        type: boolean
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Whether the current user is a [guest user](/help/roles-and-permissions).
+                      enter_sends:
+                        type: boolean
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Whether the user setting for [sending on pressing Enter](/help/enable-enter-to-send)
+                          in the compose box is enabled.
+                      user_id:
+                        type: integer
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          The unique ID for the current user.
+                      email:
+                        type: string
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          The Zulip display email address for the current user.  See also
+                          `delivery_email`; these may be the same or different depending
+                          on the organization's `email_address_visibility` policy.
+                      delivery_email:
+                        type: string
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          The user's email address, appropriate for UI for changing
+                          the user's email address.  See also `email`.
+                      full_name:
+                        type: string
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          The full name of the current user.
+                      cross_realm_bots:
+                        type: array
+                        description: |
+                          Present if `realm_user` is present in `fetch_event_types`.
+
+                          Array of dictionaries where each dictionary contains details of
+                          a single cross realm bot.  Cross-realm bots are special system bot accounts
+                          like Notification Bot.
+
+                          Most clients will want to combine this with `realm_users` in many
+                          contexts.
+                        items:
+                          allOf:
+                            - $ref: "#/components/schemas/UserBase"
+                            - additionalProperties: false
+                              properties:
+                                email: {}
+                                is_bot: {}
+                                avatar_url: {}
+                                avatar_version: {}
+                                full_name: {}
+                                is_admin: {}
+                                is_owner: {}
+                                role: {}
+                                bot_type: {}
+                                user_id: {}
+                                bot_owner_id: {}
+                                is_active: {}
+                                is_guest: {}
+                                timezone: {}
+                                date_joined: {}
+                                delivery_email: {}
+                                profile_data: {}
+                                is_cross_realm_bot:
+                                  type: boolean
+                                  description: |
+                                    Whether the user is a cross realm bot.
+                    example:
+                      {
+                        "last_event_id": -1,
+                        "msg": "",
+                        "queue_id": "1517975029:0",
+                        "realm_emoji":
+                          {
+                            "1":
+                              {
+                                "author_id": 5,
+                                "deactivated": false,
+                                "id": "1",
+                                "name": "green_tick",
+                                "source_url": "/user_avatars/1/emoji/images/1.png",
+                              },
+                          },
+                        "result": "success",
+                        "zulip_feature_level": 2,
+                        "zulip_version": "2.1.0",
+                      }
+  /server_settings:
+    get:
+      operationId: get_server_settings
+      summary: Get server settings
+      tags: ["server_and_organizations"]
+      description: |
+        Fetch global settings for a Zulip server.
+
+        `GET {{ api_url }}/v1/server_settings`
+
+        **Note:** this endpoint does not require any authentication at all, and you can use it to check:
+
+        * If this is a Zulip server, and if so, what version of Zulip it's running.
+        * What a Zulip client (e.g. a mobile app or
+        [zulip-terminal](https://github.com/zulip/zulip-terminal/)) needs to
+        know in order to display a login prompt for the server (e.g. what
+        authentication methods are available).
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/JsonSuccessBase"
+                  - additionalProperties: false
+                    properties:
+                      result: {}
+                      msg: {}
+                      authentication_methods:
+                        type: object
+                        additionalProperties: false
+                        deprecated: true
+                        description: |
+                          Each key-value pair in the object indicates whether the authentication
+                          method is enabled on this server.
+
+                          **Changes**: Deprecated in Zulip 2.1, in favor of the more expressive
+                          `external_authentication_methods`.
+                        properties:
+                          password:
+                            description: |
+                              Whether the user can authenticate using password.
+                            type: boolean
+                          dev:
+                            description: |
+                              Whether the user can authenticate using development API key.
+                            type: boolean
+                          email:
+                            description: |
+                              Whether the user can authenticate using email.
+                            type: boolean
+                          ldap:
+                            description: |
+                              Whether the user can authenticate using LDAP.
+                            type: boolean
+                          remoteuser:
+                            description: |
+                              Whether the user can authenticate using REMOTE_USER.
+                            type: boolean
+                          github:
+                            description: |
+                              Whether the user can authenticate using their GitHub account.
+                            type: boolean
+                          azuread:
+                            description: |
+                              Whether the user can authenticate using their Azure Active Directory account.
+                            type: boolean
+                          gitlab:
+                            description: |
+                              Whether the user can authenticate using their GitLab account.
+                            type: boolean
+                          apple:
+                            description: |
+                              Whether the user can authenticate using their Apple account.
+                            type: boolean
+                          google:
+                            description: |
+                              Whether the user can authenticate using their Google account.
+                            type: boolean
+                          saml:
+                            description: |
+                              Whether the user can authenticate using SAML.
+                            type: boolean
+                          openid connect:
+                            description: |
+                              Whether the user can authenticate using OpenID Connect.
+                            type: boolean
+                      external_authentication_methods:
+                        type: array
+                        description: |
+                          A list of dictionaries describing the available external
+                          authentication methods (E.g. Google, GitHub, or SAML)
+                          enabled for this organization.
+
+                          The list is sorted in the order in which these
+                          authentication methods should be displayed.
+
+                          **Changes**: New in Zulip 2.1.
+                        items:
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            name:
+                              type: string
+                              description: |
+                                A unique, table, machine-readable name for the authentication method,
+                                intended to be used by clients with special behavior for specific
+                                authentication methods to correctly identify the method.
+                            display_name:
+                              type: string
+                              description: |
+                                Display name of the authentication method, to be used in all buttons
+                                for the authentication method.
+                            display_icon:
+                              type: string
+                              nullable: true
+                              description: |
+                                URL for an image to be displayed as an icon in all buttons for
+                                the external authentication method.
+
+                                When null, no icon should be displayed.
+                            login_url:
+                              type: string
+                              description: |
+                                URL to be used to initiate authentication using this method.
+                            signup_url:
+                              type: string
+                              description: |
+                                URL to be used to initiate account registration using this method.
+                      zulip_version:
+                        type: string
+                        description: |
+                          The version of Zulip running in the server.
+                      zulip_feature_level:
+                        type: integer
+                        description: |
+                          An integer indicating what features are
+                          available on the server. The feature level increases monotonically;
+                          a value of N means the server supports all API features introduced
+                          before feature level N.  This is designed to provide a simple way
+                          for client apps to decide whether the server supports a given
+                          feature or API change.  See the [changelog](/api/changelog) for
+                          details on what each feature level means.
+
+                          **Changes**.  New in Zulip 3.0.  We recommend using an implied value
+                          of 0 for Zulip servers that do not send this field.
+                      push_notifications_enabled:
+                        type: boolean
+                        description: |
+                          Whether mobile/push notifications are enabled.
+                      is_incompatible:
+                        type: boolean
+                        description: |
+                          Whether the Zulip client that has sent a request to this endpoint is
+                          deemed incompatible with the server.
+                      email_auth_enabled:
+                        type: boolean
+                        description: |
+                          Setting for allowing users authenticate with an email-password
+                          combination.
+                      require_email_format_usernames:
+                        type: boolean
+                        description: |
+                          Whether all valid usernames for authentication to this
+                          organization will be email addresses. This is important
+                          for clients to know whether to do client side validation
+                          of email address format in a login prompt.
+
+                          This value will be false if the server has [LDAP
+                          authentication][ldap-auth] enabled with a username and
+                          password combination.
+                      realm_uri:
+                        type: string
+                        description: |
+                          The organization's canonical URL.
+                      realm_name:
+                        type: string
+                        description: |
+                          The organization's name (for display purposes).
+                      realm_icon:
+                        type: string
+                        description: |
+                          The URL for the organization's logo formatted as a square image,
+                          used for identifying the organization in small locations in the
+                          mobile and desktop apps.
+                      realm_description:
+                        type: string
+                        description: |
                           HTML description of the organization, as configured by the [organization
                           profile](/help/create-your-organization-profile).
-                  - example:
+                    example:
+                      {
+                        "authentication_methods":
+                          {
+                            "password": true,
+                            "dev": true,
+                            "email": true,
+                            "ldap": false,
+                            "remoteuser": false,
+                            "github": true,
+                            "azuread": false,
+                            "google": true,
+                            "saml": true,
+                          },
+                        "zulip_version": "2.0.6+git",
+                        "push_notifications_enabled": false,
+                        "msg": "",
+                        "is_incompatible": false,
+                        "email_auth_enabled": true,
+                        "require_email_format_usernames": true,
+                        "realm_uri": "http://localhost:9991",
+                        "realm_name": "Zulip Dev",
+                        "realm_icon": "https://secure.gravatar.com/avatar/62429d594b6ffc712f54aee976a18b44?d=identicon",
+                        "realm_description": "<p>The Zulip development environment default organization.  It's great for testing!</p>",
+                        "result": "success",
+                        "external_authentication_methods":
+                          [
+                            {
+                              "name": "saml:idp_name",
+                              "display_name": "SAML",
+                              "display_icon": null,
+                              "login_url": "/accounts/login/social/saml/idp_name",
+                              "signup_url": "/accounts/register/social/saml/idp_name",
+                            },
+                            {
+                              "name": "google",
+                              "display_name": "Google",
+                              "display_icon": "/static/images/landing-page/logos/googl_e-icon.png",
+                              "login_url": "/accounts/login/social/google",
+                              "signup_url": "/accounts/register/social/google",
+                            },
+                            {
+                              "name": "github",
+                              "display_name": "GitHub",
+                              "display_icon": "/static/images/landing-page/logos/github-icon.png",
+                              "login_url": "/accounts/login/social/github",
+                              "signup_url": "/accounts/register/social/github",
+                            },
+                          ],
+                      }
+  /settings/notifications:
+    patch:
+      operationId: update_notification_settings
+      summary: Update notification settings
+      tags: ["users"]
+      description: |
+        This endpoint is used to edit the user's global notification settings.
+        See [this endpoint](/api/update-subscription-settings) for
+        per-stream notification settings.
+
+        `PATCH {{ api_url }}/v1/settings/notifications`
+      parameters:
+        - name: enable_stream_desktop_notifications
+          in: query
+          description: |
+            Enable visual desktop notifications for stream messages.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_stream_email_notifications
+          in: query
+          description: |
+            Enable email notifications for stream messages.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_stream_push_notifications
+          in: query
+          description: |
+            Enable mobile notifications for stream messages.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_stream_audible_notifications
+          in: query
+          description: |
+            Enable audible desktop notifications for stream messages.
+          schema:
+            type: boolean
+          example: true
+        - name: notification_sound
+          in: query
+          description: |
+            Notification sound name.
+
+            **Changes**: Removed unnecessary JSON-encoding of parameter in Zulip 4.0 (feature level 63).
+          schema:
+            type: string
+          example: ding
+        - name: enable_desktop_notifications
+          in: query
+          description: |
+            Enable visual desktop notifications for private messages and @-mentions.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_sounds
+          in: query
+          description: |
+            Enable audible desktop notifications for private messages and
+            @-mentions.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_offline_email_notifications
+          in: query
+          description: |
+            Enable email notifications for private messages and @-mentions received
+            when the user is offline.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_offline_push_notifications
+          in: query
+          description: |
+            Enable mobile notification for private messages and @-mentions received
+            when the user is offline.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_online_push_notifications
+          in: query
+          description: |
+            Enable mobile notification for private messages and @-mentions received
+            when the user is online.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_digest_emails
+          in: query
+          description: |
+            Enable digest emails when the user is away.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_marketing_emails
+          in: query
+          description: |
+            Enable marketing emails. Has no function outside Zulip Cloud.
+          schema:
+            type: boolean
+          example: true
+        - name: enable_login_emails
+          in: query
+          description: |
+            Enable email notifications for new logins to account.
+          schema:
+            type: boolean
+          example: true
+        - name: message_content_in_email_notifications
+          in: query
+          description: |
+            Include the message's content in email notifications for new messages.
+          schema:
+            type: boolean
+          example: true
+        - name: pm_content_in_desktop_notifications
+          in: query
+          description: |
+            Include content of private messages in desktop notifications.
+          schema:
+            type: boolean
+          example: true
+        - name: wildcard_mentions_notify
+          in: query
+          description: |
+            Whether wildcard mentions (E.g. @**all**) should send notifications
+            like a personal mention.
+          schema:
+            type: boolean
+          example: true
+        - name: desktop_icon_count_display
+          in: query
+          description: |
+            Unread count summary (appears in desktop sidebar and browser tab)
+
+            * 1 - All unreads
+            * 2 - Private messages and mentions
+            * 3 - None
+          content:
+            application/json:
+              schema:
+                type: integer
+                enum:
+                  - 1
+                  - 2
+                  - 3
+              example: 1
+        - name: realm_name_in_notifications
+          in: query
+          description: |
+            Include organization name in subject of message notification emails.
+          schema:
+            type: boolean
+          example: true
+        - name: presence_enabled
+          in: query
+          description: |
+            Display the presence status to other users when online.
+          schema:
+            type: boolean
+          example: true
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/JsonSuccessBase"
+                  - additionalProperties: false
+                    properties:
+                      result: {}
+                      msg: {}
+                      enable_desktop_notifications:
+                        type: boolean
+                        description: |
+                          The setting for `enable_desktop_notifications`, if it was changed in
+                          this request.
+                      enable_digest_emails:
+                        type: boolean
+                        description: |
+                          The setting for `enable_digest_emails`, if it was changed in this
+                          request.
+                      enable_marketing_emails:
+                        type: boolean
+                        description: |
+                          The setting for `enable_marketing_emails`, if it was changed in this
+                          request.
+                      enable_offline_email_notifications:
+                        type: boolean
+                        description: |
+                          The setting for `enable_offline_email_notifications`, if it was changed
+                          in this request.
+                      enable_offline_push_notifications:
+                        type: boolean
+                        description: |
+                          The setting for `enable_offline_push_notifications`, if it was changed
+                          in this request.
+                      enable_online_push_notifications:
+                        type: boolean
+                        description: |
+                          The setting for `enable_online_push_notifications`, if it was changed in
+                          this request.
+                      enable_sounds:
+                        type: boolean
+                        description: |
+                          The setting for `enable_sounds`, if it was changed in this request.
+                      enable_stream_email_notifications:
+                        type: boolean
+                        description: |
+                          The setting for `enable_stream_email_notifications`, if it was changed
+                          in this request.
+                      enable_stream_push_notifications:
+                        type: boolean
+                        description: |
+                          The setting for `enable_stream_push_notifications`, if it was changed in
+                          this request.
+                      enable_stream_audible_notifications:
+                        type: boolean
+                        description: |
+                          The setting for `enable_stream_audible_notifications`, if it was changed
+                          in this request.
+                      message_content_in_email_notifications:
+                        type: boolean
+                        description: |
+                          The setting for `message_content_in_email_notifications`, if it was
+                          changed in this request.
+                    example:
+                      {
+                        "enable_offline_push_notifications": true,
+                        "enable_online_push_notifications": true,
+                        "msg": "",
+                        "result": "success",
+                      }
+  /settings/display:
+    patch:
+      operationId: update_display_settings
+      summary: Update display settings
+      tags: ["users"]
+      description: |
+        This endpoint is used to edit the current user's user interface settings.
+
+        `PATCH {{ api_url }}/v1/settings/display`
+      parameters:
+        - name: twenty_four_hour_time
+          in: query
+          description: |
+            Whether time should be [displayed in 24-hour notation](/help/change-the-time-format).
+          schema:
+            type: boolean
+          example: true
+        - name: dense_mode
+          in: query
+          description: |
+            This setting has no effect at present.  It is reserved for use in controlling
+            the default font size in Zulip.
+          schema:
+            type: boolean
+          example: true
+        - name: starred_message_counts
+          in: query
+          description: |
+            Whether clients should display the [number of starred
+            messages](/help/star-a-message#display-the-number-of-starred-messages).
+          schema:
+            type: boolean
+          example: true
+        - name: fluid_layout_width
+          in: query
+          description: |
+            Whether to use the [maximum available screen width](/help/enable-full-width-display)
+            for the web app's center panel (message feed, recent topics) on wide screens.
+          schema:
+            type: boolean
+          example: true
+        - name: high_contrast_mode
+          in: query
+          description: |
+            This setting is reserved for use to control variations in Zulip's design
+            to help visually impaired users.
+          schema:
+            type: boolean
+          example: true
+        - name: color_scheme
+          in: query
+          description: |
+            Controls which [color theme](/help/night-mode) to use.
+
+            * 1 - Automatic
+            * 2 - Night mode
+            * 3 - Day mode
+
+            Automatic detection is implementing using the standard `prefers-color-scheme`
+            media query.
+          content:
+            application/json:
+              schema:
+                type: integer
+                enum:
+                  - 1
+                  - 2
+                  - 3
+              example: 1
+        - name: translate_emoticons
+          in: query
+          description: |
+            Whether to [translate emoticons to emoji](/help/enable-emoticon-translations)
+            in messages the user sends.
+          schema:
+            type: boolean
+          example: true
+        - name: default_language
+          in: query
+          description: |
+            What [default language](/help/change-your-language) to use for the account.
+
+            This controls both the Zulip UI as well as email notifications sent to the user.
+
+            The value needs to be a standard language code that the Zulip server has
+            translation data for; for example, `"en"` for English or `"de"` for German.
+
+            **Changes**: Removed unnecessary JSON-encoding of parameter in Zulip 4.0 (feature level 63).
+          schema:
+            type: string
+          example: en
+        - name: default_view
+          in: query
+          description: |
+            The [default view](/help/change-default-view) used when opening a new
+            Zulip web app window or hitting the `Esc` keyboard shortcut repeatedly.
+
+            * "recent_topics" - Recent topics view
+            * "all_messages" - All messages view
+
+            **Changes**: Removed unnecessary JSON-encoding of parameter in Zulip 4.0 (feature level 64).
+          schema:
+            type: string
+          example: all_messages
+        - name: left_side_userlist
+          in: query
+          description: |
+            Whether the users list on left sidebar in narrow windows.
+
+            This feature is not heavily used and is likely to be reworked.
+          schema:
+            type: boolean
+          example: true
+        - name: emojiset
+          in: query
+          description: |
+            The user's configured [emoji set](/help/emoji-and-emoticons#use-emoticons),
+            used to display emoji to the user everything they appear in the UI.
+
+            * "google" - Google modern
+            * "google-blob" - Google classic
+            * "twitter" - Twitter
+            * "text" - Plain text
+
+            **Changes**: Removed unnecessary JSON-encoding of parameter in Zulip 4.0 (feature level 64).
+          schema:
+            type: string
+          example: "google"
+        - name: demote_inactive_streams
+          in: query
+          description: |
+            Whether to [demote inactive streams](/help/manage-inactive-streams) in the left sidebar.
+
+            * 1 - Automatic
+            * 2 - Always
+            * 3 - Never
+          content:
+            application/json:
+              schema:
+                type: integer
+                enum:
+                  - 1
+                  - 2
+                  - 3
+              example: 1
+        - name: timezone
+          in: query
+          description: |
+            The user's [configured timezone](/help/change-your-timezone).
+
+            Timezone values supported by the server are served at
+            [/static/generated/timezones.json](/static/generated/timezones.json).
+
+            **Changes**: Removed unnecessary JSON-encoding of parameter in Zulip 4.0 (feature level 64).
+          schema:
+            type: string
+          example: "Asia/Kolkata"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/JsonSuccessBase"
+                  - additionalProperties: false
+                    properties:
+                      result: {}
+                      msg: {}
+                      twenty_four_hour_time:
+                        type: boolean
+                        description: |
+                          The setting for `twenty_four_hour_time`, if it was changed in this request.
+                      dense_mode:
+                        type: boolean
+                        description: |
+                          The setting for `dense_mode`, if it was changed in this request.
+                          This setting is however reserved for future, and can not be
+                          modified in production environment.
+                      starred_message_counts:
+                        type: boolean
+                        description: |
+                          The setting for `starred_message_counts`, if it was changed
+                          in this request.
+                      fluid_layout_width:
+                        type: boolean
+                        description: |
+                          The setting for `fluid_layout_width`, if it was changed
+                          in this request.
+                      high_contrast_mode:
+                        type: boolean
+                        description: |
+                          The setting for `high_contrast_mode`, if it was changed in
+                          this request.
+                          This setting is however reserved for future, and can not be
+                          modified in production environment.
+                      color_scheme:
+                        type: integer
+                        description: |
+                          The numerical key corresponding to new `color_scheme` if it was changed in this request.
+                      translate_emoticons:
+                        type: boolean
+                        description: |
+                          The setting for `translate_emoticons`, if it was changed in this request.
+                      default_language:
+                        type: string
+                        description: |
+                          The language code corresponding to new `default_language` if it was changed in this request.
+                      default_view:
+                        type: string
+                        description: |
+                          The new setting for `default_view`, if it was changed in this request.
+                      left_side_userlist:
+                        type: boolean
+                        description: |
+                          The setting for `left_side_userlist`, if it was changed in this request.
+                      emojiset:
+                        type: string
+                        description: |
+                          The string identifier corresponding to new `emojiset` if it was changed in this request.
+                      demote_inactive_streams:
+                        type: integer
+                        description: |
+                          The numerical key corresponding to new `demote_inactive_streams` setting if it was changed in this request.
+                      timezone:
+                        type: string
+                        description: |
+                          The setting for `timezone`, if it was changed in this request.
+                    example:
+                      {
+                        "emojiset": "google",
+                        "left_side_userlist": true,
+                        "msg": "",
+                        "result": "success",
+                      }
+  /streams:
+    get:
+      operationId: get_streams
+      summary: Get all streams
+      tags: ["streams"]
+      description: |
+        Get all streams that the user has access to.
+
+        `GET {{ api_url }}/v1/streams`
+      parameters:
+        - name: include_public
+          in: query
+          description: |
+            Include all public streams.
+          schema:
+            type: boolean
+            default: true
+          example: false
+        - name: include_web_public
+          in: query
+          description: |
+            Include all web public streams.
+          schema:
+            type: boolean
+            default: false
+          example: true
+        - name: include_subscribed
+          in: query
+          description: |
+            Include all streams that the user is subscribed to.
+          schema:
+            type: boolean
+            default: true
+          example: false
+        - name: include_all_active
+          in: query
+          description: |
+            Include all active streams. The user must have administrative privileges
+            to use this parameter.
+          schema:
+            type: boolean
+            default: false
+          example: true
+        - name: include_default
+          in: query
+          description: |
+            Include all default streams for the user's realm.
+          schema:
+            type: boolean
+            default: false
+          example: true
+        - name: include_owner_subscribed
+          in: query
+          description: |
+            If the user is a bot, include all streams that the bot's owner is
+            subscribed to.
+          schema:
+            type: boolean
+            default: false
+          example: true
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/JsonSuccessBase"
+                  - additionalProperties: false
+                    properties:
+                      result: {}
+                      msg: {}
+                      streams:
+                        description: |
+                          A list of `stream` objects with details on the requested streams.
+                        type: array
+                        items:
+                          allOf:
+                            - $ref: "#/components/schemas/BasicStreamBase"
+                            - additionalProperties: false
+                              properties:
+                                stream_id: {}
+                                name: {}
+                                description: {}
+                                date_created: {}
+                                invite_only: {}
+                                rendered_description: {}
+                                is_web_public: {}
+                                stream_post_policy: {}
+                                message_retention_days: {}
+                                history_public_to_subscribers: {}
+                                first_message_id: {}
+                                is_announcement_only: {}
+                                is_default:
+                                  type: boolean
+                                  description: |
+                                    Whether the given stream is a
+                                    [default stream](/help/set-default-streams-for-new-users).  Only
+                                    returned if the `include_default` parameter is `true`.
+                    example:
                       {
                         "authentication_methods":
                           {

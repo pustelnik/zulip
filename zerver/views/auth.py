@@ -63,6 +63,7 @@ from zproject.backends import (
     AUTH_BACKEND_NAME_MAP,
     ExternalAuthDataDict,
     ExternalAuthResult,
+    GenericOpenIdConnectBackend,
     SAMLAuthBackend,
     ZulipLDAPAuthBackend,
     ZulipLDAPConfigurationError,
@@ -511,10 +512,16 @@ def start_social_login(request: HttpRequest, backend: str, extra_arg: Optional[s
         # This backend requires the name of the IdP (from the list of configured ones)
         # to be passed as the parameter.
         if not extra_arg or extra_arg not in settings.SOCIAL_AUTH_SAML_ENABLED_IDPS:
-            logging.info("Attempted to initiate SAML authentication with wrong idp argument: %s",
-                         extra_arg)
-            return redirect_to_config_error("saml")
-        extra_url_params = {'idp': extra_arg}
+            logging.info(
+                "Attempted to initiate SAML authentication with wrong idp argument: %s", extra_arg
+            )
+            return config_error(request, "saml")
+        extra_url_params = {"idp": extra_arg}
+
+    if backend == "apple" and not AppleAuthBackend.check_config():
+        return config_error(request, "apple")
+    if backend == "oidc" and not GenericOpenIdConnectBackend.check_config():
+        return config_error(request, "oidc")
 
     # TODO: Add AzureAD also.
     if backend in ["github", "google", "gitlab", "apple"]:
@@ -1002,16 +1009,18 @@ def saml_sp_metadata(request: HttpRequest, **kwargs: Any) -> HttpResponse:  # no
 
 def config_error_view(request: HttpRequest, error_category_name: str) -> HttpResponse:
     contexts = {
-        'apple': {'social_backend_name': 'apple', 'has_markdown_file': True},
-        'google': {'social_backend_name': 'google', 'has_markdown_file': True},
-        'github': {'social_backend_name': 'github', 'has_markdown_file': True},
-        'gitlab': {'social_backend_name': 'gitlab', 'has_markdown_file': True},
-        'ldap': {'error_name': 'ldap_error_realm_is_none'},
-        'dev': {'error_name': 'dev_not_supported_error'},
-        'saml': {'social_backend_name': 'saml'},
-        'smtp': {'error_name': 'smtp_error'},
-        'backend_disabled': {'error_name': 'remoteuser_error_backend_disabled'},
-        'remote_user_header_missing': {'error_name': 'remoteuser_error_remote_user_header_missing'},
+        "apple": {"social_backend_name": "apple", "has_markdown_file": True},
+        "google": {"social_backend_name": "google", "has_markdown_file": True},
+        "github": {"social_backend_name": "github", "has_markdown_file": True},
+        "gitlab": {"social_backend_name": "gitlab", "has_markdown_file": True},
+        "ldap": {"error_name": "ldap_error_realm_is_none"},
+        "dev": {"error_name": "dev_not_supported_error"},
+        "saml": {"social_backend_name": "saml"},
+        "smtp": {"error_name": "smtp_error"},
+        "remote_user_backend_disabled": {"error_name": "remoteuser_error_backend_disabled"},
+        "remote_user_header_missing": {"error_name": "remoteuser_error_remote_user_header_missing"},
+        # TODO: Improve the config error page for OIDC.
+        "oidc": {"error_name": "oidc_error"},
     }
 
     return TemplateView.as_view(template_name='zerver/config_error.html',

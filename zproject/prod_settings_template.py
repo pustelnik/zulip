@@ -1,5 +1,7 @@
 from typing import Any, Dict, Tuple
 
+from .config import get_secret
+
 ################################################################
 # Zulip Server settings.
 #
@@ -125,6 +127,7 @@ AUTHENTICATION_BACKENDS: Tuple[str, ...] = (
     # 'zproject.backends.SAMLAuthBackend', # SAML, setup below
     # 'zproject.backends.ZulipLDAPAuthBackend',  # LDAP, setup below
     # 'zproject.backends.ZulipRemoteUserBackend',  # Local SSO, setup docs on readthedocs
+    # 'zproject.backends.GenericOpenIdConnectBackend',  # Generic OIDC integration, setup below
 )
 
 ########
@@ -210,15 +213,41 @@ AUTHENTICATION_BACKENDS: Tuple[str, ...] = (
 #SOCIAL_AUTH_SUBDOMAIN = 'auth'
 
 ########
-# SAML Authentication
-#
-# For SAML authentication, you will need to configure the settings
-# below using information from your SAML Identity Provider, as
-# explained in:
-#
-#     https://zulip.readthedocs.io/en/latest/production/authentication-methods.html#saml
-#
-# You will need to modify these SAML settings:
+## Generic OpenID Connect (OIDC).  See also documentation here:
+##
+##     https://zulip.readthedocs.io/en/latest/production/authentication-methods.html#openid-connect
+##
+
+SOCIAL_AUTH_OIDC_ENABLED_IDPS = {
+    ## This field (example: "idp_name") may appear in URLs during
+    ## authentication, but is otherwise not user-visible.
+    "idp_name": {
+        ## The base path to the provider's OIDC API. Zulip fetches the
+        ## IdP's configuration from the discovery endpoint, which will be
+        ## "{oidc_url}/.well-known/openid-configuration".
+        "oidc_url": "https://example.com/api/openid",
+        ## The display name, used for "Log in with <display name>" buttons.
+        "display_name": "Example",
+        ## Optional: URL of an icon to decorate "Log in with <display name>" buttons.
+        "display_icon": None,
+        ## The client_id and secret provided by your OIDC IdP. To keep
+        ## settings.py free of secrets, the get_secret call below
+        ## reads the secret with the specified name from zulip-secrets.conf.
+        "client_id": "<your client id>",
+        "secret": get_secret("social_auth_oidc_secret"),
+    }
+}
+
+########
+## SAML authentication
+##
+## For SAML authentication, you will need to configure the settings
+## below using information from your SAML identity provider, as
+## explained in:
+##
+##     https://zulip.readthedocs.io/en/latest/production/authentication-methods.html#saml
+##
+## You will need to modify these SAML settings:
 SOCIAL_AUTH_SAML_ORG_INFO = {
     "en-US": {
         "displayname": "Example, Inc. Zulip",

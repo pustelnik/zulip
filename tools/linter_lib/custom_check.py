@@ -23,12 +23,13 @@ FILES_WITH_LEGACY_SUBJECT = {
 
     # These use subject in the email sense, and will
     # probably always be exempt:
-    'zerver/lib/email_mirror.py',
-    'zerver/lib/send_email.py',
-    'zerver/tests/test_new_users.py',
-    'zerver/tests/test_email_mirror.py',
-    'zerver/tests/test_email_notifications.py',
-
+    "zerver/lib/email_mirror.py",
+    "zerver/lib/send_email.py",
+    "zerver/tests/test_new_users.py",
+    "zerver/tests/test_email_mirror.py",
+    "zerver/tests/test_email_notifications.py",
+    # This uses subject in authentication protocols sense:
+    "zerver/tests/test_auth_backends.py",
     # These are tied more to our API than our DB model.
     'zerver/openapi/python_examples.py',
     'zerver/tests/test_openapi.py',

@@ -81,21 +81,34 @@ class PublicURLTest(ZulipTestCase):
         for status_code, url_set in patch_urls.items():
             self.fetch("client_patch", url_set, status_code)
 
-    def test_get_gcid_when_not_configured(self) -> None:
-        with self.settings(GOOGLE_CLIENT_ID=None):
-            resp = self.client_get("/api/v1/fetch_google_client_id")
-            self.assertEqual(400, resp.status_code,
-                             msg=f"Expected 400, received {resp.status_code} for GET /api/v1/fetch_google_client_id")
-            self.assertEqual('error', resp.json()['result'])
+    def test_config_error_endpoints_dev_env(self) -> None:
+        """
+        The content of these pages is tested separately.
+        Here we simply sanity-check that all the URLs load
+        correctly.
+        """
+        auth_types = [auth.lower() for auth in Realm.AUTHENTICATION_FLAGS]
+        for auth in [
+            "azuread",
+            "email",
+            "remoteuser",
+            # The endpoint is generated dynamically based on the configuration of the OIDC backend,
+            # so it can't be tested here.
+            "openid connect",
+        ]:  # We do not have configerror pages for AzureAD and Email.
+            auth_types.remove(auth)
 
-    def test_get_gcid_when_configured(self) -> None:
-        with self.settings(GOOGLE_CLIENT_ID="ABCD"):
-            resp = self.client_get("/api/v1/fetch_google_client_id")
-            self.assertEqual(200, resp.status_code,
-                             msg=f"Expected 200, received {resp.status_code} for GET /api/v1/fetch_google_client_id")
-            data = ujson.loads(resp.content)
-            self.assertEqual('success', data['result'])
-            self.assertEqual('ABCD', data['google_client_id'])
+        auth_types += [
+            "smtp",
+            "remoteuser/remote_user_backend_disabled",
+            "remoteuser/remote_user_header_missing",
+        ]
+        urls = [f"/config-error/{auth_type}" for auth_type in auth_types]
+        with self.settings(DEVELOPMENT=True):
+            for url in urls:
+                response = self.client_get(url)
+                self.assert_in_success_response(["Configuration error"], response)
+
 
 class URLResolutionTest(ZulipTestCase):
     def get_callback_string(self, pattern: django.urls.resolvers.URLPattern) -> Optional[str]:
