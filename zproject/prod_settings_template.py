@@ -281,13 +281,17 @@ SOCIAL_AUTH_SAML_ENABLED_IDPS = {
         "attr_last_name": "last_name",
         "attr_username": "email",
         "attr_email": "email",
-
-        # The "x509cert" attribute is automatically read from
-        # /etc/zulip/saml/idps/{idp_name}.crt; don't specify it here.
-
-        # Optionally, you can edit display_name and display_icon
-        # settings below to change the name and icon that will show on
-        # the login button.
+        ## List of additional attributes to fetch from the SAMLResponse.
+        ## These attributes will be available for synchronizing custom profile fields.
+        ## in SOCIAL_AUTH_SYNC_CUSTOM_ATTRS_DICT.
+        # "extra_attrs": ["title", "mobilePhone"],
+        ##
+        ## The "x509cert" attribute is automatically read from
+        ## /etc/zulip/saml/idps/{idp_name}.crt; don't specify it here.
+        ##
+        ## Optionally, you can edit display_name and display_icon
+        ## settings below to change the name and icon that will show on
+        ## the login button.
         "display_name": "SAML",
         # Path to a square image file containing a logo to appear at
         # the left end of the login/register buttons for this IDP.
@@ -321,6 +325,16 @@ SOCIAL_AUTH_SAML_SUPPORT_CONTACT = {
     "givenName": "Support team",
     "emailAddress": ZULIP_ADMINISTRATOR,
 }
+
+# SOCIAL_AUTH_SYNC_CUSTOM_ATTRS_DICT = {
+#    "example_org": {
+#        "saml": {
+#            # Format: "<custom profile field name>": "<attribute name from extra_attrs above>"
+#            "title": "title",
+#            "phone_number": "mobilePhone",
+#        }
+#    }
+# }
 
 ########
 # Apple authentication ("Sign in with Apple").
