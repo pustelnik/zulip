@@ -2094,6 +2094,9 @@ class GenericOpenIdConnectBackend(SocialAuthMixin, OpenIdConnectAuth):
             )
         ]
 
+    def should_auto_signup(self) -> bool:
+        return self.settings_dict.get("auto_signup", False)
+
 
 def validate_otp_params(
     mobile_flow_otp: Optional[str] = None, desktop_flow_otp: Optional[str] = None
