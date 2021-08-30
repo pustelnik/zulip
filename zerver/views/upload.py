@@ -1,3 +1,5 @@
+import logging
+
 from mimetypes import guess_type
 
 from django.conf import settings
@@ -24,7 +26,7 @@ def serve_s3(request: HttpRequest, url_path: str, url_only: bool) -> HttpRespons
     url = get_signed_upload_url(url_path)
     if url_only:
         return json_success(dict(url=url))
-
+    logging.info(f'[views/upload.py] serve s3 {request}')
     return redirect(url)
 
 def serve_local(request: HttpRequest, path_id: str, url_only: bool) -> HttpResponse:
@@ -59,6 +61,7 @@ def serve_local(request: HttpRequest, path_id: str, url_only: bool) -> HttpRespo
     response = sendfile(request, local_path, attachment=attachment,
                         mimetype=mimetype, encoding=encoding)
     patch_cache_control(response, private=True, immutable=True)
+    logging.info(f'[views/upload.py] >> service local req: {request} response: {response}')
     return response
 
 def serve_file_backend(request: HttpRequest, user_profile: UserProfile,
@@ -85,8 +88,9 @@ def serve_file(request: HttpRequest, user_profile: UserProfile,
     if not is_authorized:
         return HttpResponseForbidden(_("<p>You are not authorized to view this file.</p>"))
     if settings.LOCAL_UPLOADS_DIR is not None:
+        logging.info(f'[views/upload.py] (local serve) >> User {user_profile.full_name} is being served with file [{filename}] at path_id [{path_id}]')
         return serve_local(request, path_id, url_only)
-
+    logging.info(f'[views/upload.py] (s3 serve) >> User {user_profile.full_name} is being served with file [{filename}] at path_id [{path_id}]')
     return serve_s3(request, path_id, url_only)
 
 def serve_local_file_unauthed(request: HttpRequest, token: str, filename: str) -> HttpResponse:
@@ -95,7 +99,7 @@ def serve_local_file_unauthed(request: HttpRequest, token: str, filename: str) -
         return json_error(_("Invalid token"))
     if path_id.split('/')[-1] != filename:
         return json_error(_("Invalid filename"))
-
+    logging.info(f'Unauthed read of file [{filename}], path_id from token: [{path_id}]')
     return serve_local(request, path_id, url_only=False)
 
 def upload_file_backend(request: HttpRequest, user_profile: UserProfile) -> HttpResponse:
@@ -113,4 +117,5 @@ def upload_file_backend(request: HttpRequest, user_profile: UserProfile) -> Http
     check_upload_within_quota(user_profile.realm, file_size)
 
     uri = upload_message_image_from_request(request, user_file, user_profile)
+    logging.info(f'[views/upload.py] User {user_profile.full_name} is uploading file {user_file.name} with size {file_size}')
     return json_success({'uri': uri})
