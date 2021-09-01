@@ -714,6 +714,7 @@ TRACEMALLOC_DUMP_DIR = zulip_path("/var/log/zulip/tracemalloc")
 DELIVER_SCHEDULED_MESSAGES_LOG_PATH = zulip_path("/var/log/zulip/deliver_scheduled_messages.log")
 RETENTION_LOG_PATH = zulip_path("/var/log/zulip/message_retention.log")
 AUTH_LOG_PATH = zulip_path("/var/log/zulip/auth.log")
+ATTACHMENT_LOG_PATH = zulip_path("/var/log/zulip/attachment.log")
 
 ZULIP_WORKER_TEST_FILE = "/tmp/zulip-worker-test-file"
 
@@ -815,6 +816,12 @@ LOGGING: Dict[str, Any] = {
             "formatter": "default",
             "filename": LDAP_LOG_PATH,
         },
+        "attachment_file": {
+            "level": "DEBUG",
+            "class": "logging.handlers.WatchedFileHandler",
+            "formatter": "default",
+            "filename": ATTACHMENT_LOG_PATH,
+        },
         "slow_queries_file": {
             "level": "INFO",
             "class": "logging.handlers.WatchedFileHandler",
@@ -909,6 +916,16 @@ LOGGING: Dict[str, Any] = {
         "django_auth_ldap": {
             "level": "DEBUG",
             "handlers": ["console", "ldap_file", "errors_file"],
+            "propagate": False,
+        },
+        "zulip.zerver.views.upload": {
+            "level": "DEBUG",
+            "handlers": ["console", "attachment_file", "errors_file"],
+            "propagate": False,
+        },
+        "zulip.zerver.lib.upload": {
+            "level": "DEBUG",
+            "handlers": ["console", "attachment_file", "errors_file"],
             "propagate": False,
         },
         "pika": {
