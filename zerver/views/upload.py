@@ -21,7 +21,11 @@ from zerver.lib.upload import (
     upload_message_image_from_request,
 )
 from zerver.models import UserProfile, validate_attachment_request
+from zerver.lib.logging_util import log_to_file
 
+## Setup ##
+logger = logging.getLogger(__name__)
+log_to_file(logger, settings.ATTACHMENT_LOG_PATH)
 
 def serve_s3(request: HttpRequest, url_path: str, url_only: bool) -> HttpResponse:
     url = get_signed_upload_url(url_path)

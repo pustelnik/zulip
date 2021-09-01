@@ -34,6 +34,11 @@ from zerver.lib.avatar_hash import user_avatar_path
 from zerver.lib.exceptions import ErrorCode, JsonableError
 from zerver.lib.utils import assert_is_not_none
 from zerver.models import Attachment, Message, Realm, RealmEmoji, UserProfile
+from zerver.lib.logging_util import log_to_file
+
+## Setup ##
+logger = logging.getLogger(__name__)
+log_to_file(logger, settings.ATTACHMENT_LOG_PATH)
 
 DEFAULT_AVATAR_SIZE = 100
 MEDIUM_AVATAR_SIZE = 500
