@@ -101,6 +101,8 @@ pg_args = {}
 
 USING_PGROONGA = False
 try:
+    # Path to the root of the Zulip codebase in production
+    sys.path.insert(0, "/home/zulip/deployments/current")
     # Case (1); we insert the path to the development root.
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
     # Case (2) could take this branch if it set up the venv first, but

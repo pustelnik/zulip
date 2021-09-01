@@ -434,7 +434,7 @@ class S3UploadBackend(ZulipUploadBackend):
             )
             return False
         key.delete()
-        logging.info(f"[zerver/upload.py] Deleted {path_id} from S3")
+        logging.info(f"[zerver/upload.py] Deleted path='{path_id}' from S3")
         return True
 
     def get_public_upload_root_url(self) -> str:
@@ -470,7 +470,7 @@ class S3UploadBackend(ZulipUploadBackend):
 
         create_attachment(uploaded_file_name, s3_file_name, user_profile, uploaded_file_size)
         logging.info(
-            "[zerver/lib/upload.py][S3UploadBackend] Uploading file %s, content-type: %s, user: %s, target realm: %s"
+            "[zerver/lib/upload.py][S3UploadBackend] Uploading file='%s', content-type='%s', user='%s', target realm='%s'"
             % (uploaded_file_name, content_type, user_profile.full_name, str(target_realm))
         )
         return url
@@ -732,7 +732,7 @@ def delete_local_file(type: str, path: str) -> bool:
     if os.path.isfile(file_path):
         # This removes the file but the empty folders still remain.
         os.remove(file_path)
-        logging.info(f"[zerver/lib/upload.py] Deleted local file {file_path}")
+        logging.info(f"[zerver/lib/upload.py] Deleted local file from path={file_path}")
         return True
     file_name = path.split("/")[-1]
     logging.warning("%s does not exist. Its entry in the database will be removed.", file_name)
@@ -793,7 +793,7 @@ class LocalUploadBackend(ZulipUploadBackend):
         )
 
         logging.info(
-            "[zerver/lib/upload.py][LocalUploadBackend] Uploading file %s, content-type: %s, user: %s, target realm: %s"
+            "[zerver/lib/upload.py][LocalUploadBackend] Uploading file='%s', content-type='%s', user='%s', target-realm='%s'"
             % (uploaded_file_name, content_type, user_profile.full_name, str(target_realm))
         )
 
