@@ -31,7 +31,7 @@ def serve_s3(request: HttpRequest, url_path: str, url_only: bool) -> HttpRespons
     url = get_signed_upload_url(url_path)
     if url_only:
         return json_success(dict(url=url))
-    logging.info(f'[views/upload.py] serve s3 request={request}')
+    logger.info(f'[views/upload.py] serve s3 request={request}')
     return redirect(url)
 
 
@@ -68,7 +68,7 @@ def serve_local(request: HttpRequest, path_id: str, url_only: bool) -> HttpRespo
         request, local_path, attachment=attachment, mimetype=mimetype, encoding=encoding
     )
     patch_cache_control(response, private=True, immutable=True)
-    logging.info(f"[views/upload.py] service local request='{request}' response='{response}'")
+    logger.info(f"[views/upload.py] service local request='{request}' response='{response}'")
     return response
 
 
@@ -102,12 +102,12 @@ def serve_file(
     if is_authorized is None:
         return HttpResponseNotFound(_("<p>File not found.</p>"))
     if not is_authorized:
-        logging.info(f"[views/upload.py][local] user='{user_profile.full_name}', is not authorized to access file='{filename}', path_id='{path_id}'")
+        logger.info(f"[views/upload.py][local] user='{user_profile.full_name}', is not authorized to access file='{filename}', path_id='{path_id}'")
         return HttpResponseForbidden(_("<p>You are not authorized to view this file.</p>"))
     if settings.LOCAL_UPLOADS_DIR is not None:
-        logging.info(f"[views/upload.py][local] user='{user_profile.full_name}', is served with, file='{filename}', path_id='{path_id}'")
+        logger.info(f"[views/upload.py][local] user='{user_profile.full_name}', is served with, file='{filename}', path_id='{path_id}'")
         return serve_local(request, path_id, url_only)
-    logging.info(f"[views/upload.py][S3] user='{user_profile.full_name}', is served with, file='{filename}', path_id='{path_id}'")
+    logger.info(f"[views/upload.py][S3] user='{user_profile.full_name}', is served with, file='{filename}', path_id='{path_id}'")
     return serve_s3(request, path_id, url_only)
 
 
@@ -117,7 +117,7 @@ def serve_local_file_unauthed(request: HttpRequest, token: str, filename: str) -
         raise JsonableError(_("Invalid token"))
     if path_id.split("/")[-1] != filename:
         raise JsonableError(_("Invalid filename"))
-    logging.info(f"Unauthed read of file='{filename}', path_id='{path_id}'")
+    logger.info(f"Unauthed read of file='{filename}', path_id='{path_id}'")
     return serve_local(request, path_id, url_only=False)
 
 
@@ -138,5 +138,5 @@ def upload_file_backend(request: HttpRequest, user_profile: UserProfile) -> Http
     check_upload_within_quota(user_profile.realm, file_size)
 
     uri = upload_message_image_from_request(request, user_file, user_profile)
-    logging.info(f"[views/upload.py] User='{user_profile.full_name}', uploading file='{user_file.name}', size='{file_size}'")
+    logger.info(f"[views/upload.py] User='{user_profile.full_name}', uploading file='{user_file.name}', size='{file_size}'")
     return json_success({'uri': uri})
