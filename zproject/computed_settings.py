@@ -918,12 +918,12 @@ LOGGING: Dict[str, Any] = {
             "handlers": ["console", "ldap_file", "errors_file"],
             "propagate": False,
         },
-        "zulip.zerver.views.upload": {
+        "zerver.views.upload": {
             "level": "DEBUG",
             "handlers": ["console", "attachment_file", "errors_file"],
             "propagate": False,
         },
-        "zulip.zerver.lib.upload": {
+        "zerver.lib.upload": {
             "level": "DEBUG",
             "handlers": ["console", "attachment_file", "errors_file"],
             "propagate": False,
