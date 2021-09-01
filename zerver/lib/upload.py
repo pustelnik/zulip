@@ -42,6 +42,11 @@ from zerver.models import (
     UserProfile,
     is_cross_realm_bot_email,
 )
+from zerver.lib.logging_util import log_to_file
+
+## Setup ##
+logger = logging.getLogger(__name__)
+log_to_file(logger, settings.ATTACHMENT_LOG_PATH)
 
 DEFAULT_AVATAR_SIZE = 100
 MEDIUM_AVATAR_SIZE = 500
