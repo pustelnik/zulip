@@ -26,6 +26,16 @@
 # /etc/zulip/zulip.conf to read, and that case _requires_ loading the
 # venv.
 
+import sys
+
+sys.path.append("/home/zulip/deployments/current")
+try:
+    from scripts.lib.setup_path import setup_path
+
+    setup_path()
+except ImportError:
+    pass
+
 import argparse
 import configparser
 import logging
