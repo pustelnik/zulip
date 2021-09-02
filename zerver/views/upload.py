@@ -102,12 +102,12 @@ def serve_file(
     if is_authorized is None:
         return HttpResponseNotFound(_("<p>File not found.</p>"))
     if not is_authorized:
-        logger.info(f"[views/upload.py][local] user='{user_profile.full_name}', is not authorized to access file='{filename}', path_id='{path_id}'")
+        logger.info(f"[views/upload.py] user='{user_profile.full_name}', email='{user_profile.email}', is not authorized to access file='{filename}', path_id='{path_id}'")
         return HttpResponseForbidden(_("<p>You are not authorized to view this file.</p>"))
     if settings.LOCAL_UPLOADS_DIR is not None:
-        logger.info(f"[views/upload.py][local] user='{user_profile.full_name}', is served with, file='{filename}', path_id='{path_id}'")
+        logger.info(f"[views/upload.py] user='{user_profile.full_name}', email='{user_profile.email}', is served with, file='{filename}', path_id='{path_id}'")
         return serve_local(request, path_id, url_only)
-    logger.info(f"[views/upload.py][S3] user='{user_profile.full_name}', is served with, file='{filename}', path_id='{path_id}'")
+    logger.info(f"[views/upload.py] user='{user_profile.full_name}', email='{user_profile.email}', is served with, file='{filename}', path_id='{path_id}'")
     return serve_s3(request, path_id, url_only)
 
 
@@ -138,5 +138,5 @@ def upload_file_backend(request: HttpRequest, user_profile: UserProfile) -> Http
     check_upload_within_quota(user_profile.realm, file_size)
 
     uri = upload_message_image_from_request(request, user_file, user_profile)
-    logger.info(f"[views/upload.py] User='{user_profile.full_name}', uploading file='{user_file.name}', size='{file_size}'")
+    logger.info(f"[views/upload.py] user='{user_profile.full_name}', email='{user_profile.email}', uploading file='{user_file.name}', size='{file_size}'")
     return json_success({'uri': uri})
