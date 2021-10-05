@@ -112,6 +112,23 @@ MAX_TOPIC_NAME_LENGTH = 60
 MAX_LANGUAGE_ID_LENGTH: int = 50
 
 STREAM_NAMES = TypeVar("STREAM_NAMES", Sequence[str], AbstractSet[str])
+url_regex = re.compile(
+    r"^(?:[a-z0-9.+-]*)://"  # scheme is validated separately
+    r"(?:[^\s:@/]+(?::[^\s:@/]*)?@)?"  # user:pass authentication
+    r"(?:"
+    + URLValidator.ipv4_re
+    + "|"
+    + URLValidator.ipv6_re
+    + "|"
+    + URLValidator.host_re
+    + "|("
+    + URLValidator.hostname_re
+    + "))"
+    r"(?::\d{1,5})?"  # port
+    r"(?:[/?#][^\s]*)?"  # resource path
+    r"\Z",
+    re.IGNORECASE,
+)
 
 
 class EmojiInfo(TypedDict):
@@ -1239,7 +1256,9 @@ class RealmFilter(models.Model):
     id: int = models.AutoField(auto_created=True, primary_key=True, verbose_name="ID")
     realm: Realm = models.ForeignKey(Realm, on_delete=CASCADE)
     pattern: str = models.TextField()
-    url_format_string: str = models.TextField(validators=[filter_format_validator])
+    url_format_string: str = models.TextField(
+        validators=[URLValidator(regex=url_regex), filter_format_validator]
+    )
 
     class Meta:
         unique_together = ("realm", "pattern")
@@ -1363,7 +1382,7 @@ class RealmPlayground(models.Model):
     MAX_PYGMENTS_LANGUAGE_LENGTH = 40
 
     realm: Realm = models.ForeignKey(Realm, on_delete=CASCADE)
-    url_prefix: str = models.TextField(validators=[URLValidator()])
+    url_prefix: str = models.TextField(validators=[URLValidator(regex=url_regex)])
 
     # User-visible display name used when configuring playgrounds in the settings page and
     # when displaying them in the playground links popover.
