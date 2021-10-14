@@ -44,6 +44,7 @@ from zerver.lib.realm_icon import realm_icon_url
 from zerver.lib.realm_logo import get_realm_logo_source, get_realm_logo_url
 from zerver.lib.soft_deactivation import reactivate_user_if_soft_deactivated
 from zerver.lib.stream_subscription import handle_stream_notifications_compatibility
+from zerver.lib.timestamp import datetime_to_timestamp
 from zerver.lib.topic import TOPIC_NAME
 from zerver.lib.topic_mutes import get_topic_mutes
 from zerver.lib.user_groups import user_groups_in_realm_serialized
@@ -57,6 +58,7 @@ from zerver.models import (
     Draft,
     Message,
     Realm,
+    RealmUserDefault,
     Stream,
     UserMessage,
     UserProfile,
@@ -236,8 +238,8 @@ def fetch_initial_state_data(
         state["realm_edit_topic_policy"] = (
             Realm.POLICY_ADMINS_ONLY if user_profile is None else realm.edit_topic_policy
         )
-        state["realm_allow_message_deleting"] = (
-            False if user_profile is None else realm.allow_message_deleting
+        state["realm_delete_own_message_policy"] = (
+            Realm.POLICY_ADMINS_ONLY if user_profile is None else realm.delete_own_message_policy
         )
 
         # TODO: Can we delete these lines?  They seem to be in property_types...
@@ -321,6 +323,25 @@ def fetch_initial_state_data(
         state["max_stream_description_length"] = Stream.MAX_DESCRIPTION_LENGTH
         state["max_topic_length"] = MAX_TOPIC_NAME_LENGTH
         state["max_message_length"] = settings.MAX_MESSAGE_LENGTH
+        if realm.demo_organization_scheduled_deletion_date is not None:
+            state["demo_organization_scheduled_deletion_date"] = datetime_to_timestamp(
+                realm.demo_organization_scheduled_deletion_date
+            )
+
+    if want("realm_user_settings_defaults"):
+        realm_user_default = RealmUserDefault.objects.get(realm=realm)
+        state["realm_user_settings_defaults"] = {}
+        for property_name in RealmUserDefault.property_types:
+            state["realm_user_settings_defaults"][property_name] = getattr(
+                realm_user_default, property_name
+            )
+
+        state["realm_user_settings_defaults"][
+            "emojiset_choices"
+        ] = RealmUserDefault.emojiset_choices()
+        state["realm_user_settings_defaults"][
+            "available_notification_sounds"
+        ] = get_available_notification_sounds()
 
     if want("realm_domains"):
         state["realm_domains"] = get_realm_domains(realm)
@@ -390,7 +411,17 @@ def fetch_initial_state_data(
             client_gravatar=False,
         )
 
-        state["can_create_streams"] = settings_user.can_create_streams()
+        state["can_create_private_streams"] = settings_user.can_create_private_streams()
+        state["can_create_public_streams"] = settings_user.can_create_public_streams()
+        # TODO/compatibility: Deprecated in Zulip 5.0 (feature level
+        # 102); we can remove this once we no longer need to support
+        # legacy mobile app versions that read the old property.
+        state["can_create_streams"] = (
+            settings_user.can_create_private_streams()
+            or settings_user.can_create_public_streams()
+            or settings_user.can_create_web_public_streams()
+        )
+        state["can_create_web_public_streams"] = settings_user.can_create_web_public_streams()
         state["can_subscribe_other_users"] = settings_user.can_subscribe_other_users()
         state["can_invite_others_to_realm"] = settings_user.can_invite_others_to_realm()
         state["is_admin"] = settings_user.is_realm_admin
@@ -515,13 +546,13 @@ def fetch_initial_state_data(
         state["stop_words"] = read_stop_words()
 
     if want("update_display_settings") and not user_settings_object:
-        for prop in UserProfile.property_types:
+        for prop in UserProfile.display_settings_legacy:
             state[prop] = getattr(settings_user, prop)
         state["emojiset_choices"] = UserProfile.emojiset_choices()
         state["timezone"] = settings_user.timezone
 
     if want("update_global_notifications") and not user_settings_object:
-        for notification in UserProfile.notification_setting_types:
+        for notification in UserProfile.notification_settings_legacy:
             state[notification] = getattr(settings_user, notification)
         state["available_notification_sounds"] = get_available_notification_sounds()
 
@@ -530,8 +561,6 @@ def fetch_initial_state_data(
 
         for prop in UserProfile.property_types:
             state["user_settings"][prop] = getattr(settings_user, prop)
-        for notification in UserProfile.notification_setting_types:
-            state["user_settings"][notification] = getattr(settings_user, notification)
 
         state["user_settings"]["emojiset_choices"] = UserProfile.emojiset_choices()
         state["user_settings"]["timezone"] = settings_user.timezone
@@ -557,6 +586,12 @@ def fetch_initial_state_data(
         # to exist at all so that they can deactivate them in cases of
         # abuse.
         state["giphy_api_key"] = settings.GIPHY_API_KEY if settings.GIPHY_API_KEY else ""
+
+    if user_profile is None:
+        # To ensure we have the correct user state set.
+        assert state["is_admin"] is False
+        assert state["is_owner"] is False
+        assert state["is_guest"] is True
 
     return state
 
@@ -718,7 +753,16 @@ def apply_event(
                     state["is_moderator"] = person["role"] == UserProfile.ROLE_MODERATOR
                     state["is_guest"] = person["role"] == UserProfile.ROLE_GUEST
                     # Recompute properties based on is_admin/is_guest
-                    state["can_create_streams"] = user_profile.can_create_streams()
+                    state["can_create_private_streams"] = user_profile.can_create_private_streams()
+                    state["can_create_public_streams"] = user_profile.can_create_public_streams()
+                    state[
+                        "can_create_web_public_streams"
+                    ] = user_profile.can_create_web_public_streams()
+                    state["can_create_streams"] = (
+                        state["can_create_private_streams"]
+                        or state["can_create_public_streams"]
+                        or state["can_create_web_public_streams"]
+                    )
                     state["can_subscribe_other_users"] = user_profile.can_subscribe_other_users()
                     state["can_invite_others_to_realm"] = user_profile.can_invite_others_to_realm()
 
@@ -750,6 +794,9 @@ def apply_event(
                 for field in ["delivery_email", "email", "full_name", "is_billing_admin"]:
                     if field in person and field in state:
                         state[field] = person[field]
+
+                if "new_email" in person:
+                    state["email"] = person["new_email"]
 
                 # In the unlikely event that the current user
                 # just changed to/from being an admin, we need
@@ -796,6 +843,8 @@ def apply_event(
                             p["profile_data"][str(custom_field_id)] = {
                                 "value": custom_field_new_value,
                             }
+                    if "new_email" in person:
+                        p["email"] = person["new_email"]
         else:
             raise AssertionError("Unexpected event type {type}/{op}".format(**event))
     elif event["type"] == "realm_bot":
@@ -862,6 +911,12 @@ def apply_event(
                     obj[event["property"]] = event["value"]
                     if event["property"] == "description":
                         obj["rendered_description"] = event["rendered_description"]
+                    if event.get("history_public_to_subscribers") is not None:
+                        obj["history_public_to_subscribers"] = event[
+                            "history_public_to_subscribers"
+                        ]
+                    if event.get("is_web_public") is not None:
+                        obj["is_web_public"] = event["is_web_public"]
             # Also update the pure streams data
             if "streams" in state:
                 for stream in state["streams"]:
@@ -871,6 +926,13 @@ def apply_event(
                             stream[prop] = event["value"]
                             if prop == "description":
                                 stream["rendered_description"] = event["rendered_description"]
+                            if event.get("history_public_to_subscribers") is not None:
+                                stream["history_public_to_subscribers"] = event[
+                                    "history_public_to_subscribers"
+                                ]
+                            if event.get("is_web_public") is not None:
+                                stream["is_web_public"] = event["is_web_public"]
+
     elif event["type"] == "default_streams":
         state["realm_default_streams"] = event["default_streams"]
     elif event["type"] == "default_stream_groups":
@@ -886,7 +948,9 @@ def apply_event(
                 state["realm_upload_quota_mib"] = event["extra_data"]["upload_quota"]
 
             policy_permission_dict = {
-                "create_stream_policy": "can_create_streams",
+                "create_public_stream_policy": "can_create_public_streams",
+                "create_private_stream_policy": "can_create_private_streams",
+                "create_web_public_stream_policy": "can_create_web_public_streams",
                 "invite_to_stream_policy": "can_subscribe_other_users",
                 "invite_to_realm_policy": "can_invite_others_to_realm",
             }
@@ -905,6 +969,12 @@ def apply_event(
                         event["property"]
                     )
 
+            # Finally, we need to recompute this value from its inputs.
+            state["can_create_streams"] = (
+                state["can_create_private_streams"]
+                or state["can_create_public_streams"]
+                or state["can_create_web_public_streams"]
+            )
         elif event["op"] == "update_dict":
             for key, value in event["data"].items():
                 state["realm_" + key] = value
@@ -923,6 +993,11 @@ def apply_event(
             # /events) and immediately reloaded into the same
             # deactivation UI. Passing achieves the same result.
             pass
+        else:
+            raise AssertionError("Unexpected event type {type}/{op}".format(**event))
+    elif event["type"] == "realm_user_settings_defaults":
+        if event["op"] == "update":
+            state["realm_user_settings_defaults"][event["property"]] = event["value"]
         else:
             raise AssertionError("Unexpected event type {type}/{op}".format(**event))
     elif event["type"] == "subscription":
@@ -1112,21 +1187,21 @@ def apply_event(
         state["realm_playgrounds"] = event["realm_playgrounds"]
     elif event["type"] == "update_display_settings":
         if event["setting_name"] != "timezone":
-            assert event["setting_name"] in UserProfile.property_types
+            assert event["setting_name"] in UserProfile.display_settings_legacy
         state[event["setting_name"]] = event["setting"]
     elif event["type"] == "update_global_notifications":
-        assert event["notification_name"] in UserProfile.notification_setting_types
+        assert event["notification_name"] in UserProfile.notification_settings_legacy
         state[event["notification_name"]] = event["setting"]
     elif event["type"] == "user_settings":
-        # timezone setting is not included in property_types or
-        # notification_setting_types dicts, because this setting
-        # is not a part of UserBaseSettings class.
+        # timezone setting is not included in property_types dict because
+        # this setting is not a part of UserBaseSettings class.
         if event["property"] != "timezone":
-            assert (
-                event["property"] in UserProfile.property_types
-                or event["property"] in UserProfile.notification_setting_types
-            )
-        state[event["property"]] = event["value"]
+            assert event["property"] in UserProfile.property_types
+        if event["property"] in {
+            **UserProfile.display_settings_legacy,
+            **UserProfile.notification_settings_legacy,
+        }:
+            state[event["property"]] = event["value"]
         state["user_settings"][event["property"]] = event["value"]
     elif event["type"] == "invites_changed":
         pass

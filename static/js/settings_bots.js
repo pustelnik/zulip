@@ -164,12 +164,12 @@ export const bot_creation_policy_values = {
     },
     everyone: {
         code: 1,
-        description: $t({defaultMessage: "Admins and members"}),
+        description: $t({defaultMessage: "Admins, moderators and members"}),
     },
     restricted: {
         code: 2,
         description: $t({
-            defaultMessage: "Admins and members, but only admins can add generic bots",
+            defaultMessage: "Admins, moderators and members, but only admins can add generic bots",
         }),
     },
 };
@@ -192,12 +192,12 @@ export function update_bot_settings_tip() {
     let tip_text;
     if (current_permission === permission_type.admins_only.code) {
         tip_text = $t({
-            defaultMessage: "Only organization administrators can add bots to this organization",
+            defaultMessage: "Only organization administrators can add bots to this organization.",
         });
     } else if (current_permission === permission_type.restricted.code) {
-        tip_text = $t({defaultMessage: "Only organization administrators can add generic bots"});
+        tip_text = $t({defaultMessage: "Only organization administrators can add generic bots."});
     } else {
-        tip_text = $t({defaultMessage: "Anyone in this organization can add bots"});
+        tip_text = $t({defaultMessage: "Anyone in this organization can add bots."});
     }
     $(".bot-settings-tip").text(tip_text);
 }

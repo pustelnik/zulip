@@ -73,7 +73,8 @@ exports.test_realm_emojis = {
     101: {
         id: "101",
         name: "spain",
-        source_url: "/some/path/to/spain.png",
+        source_url: "/some/path/to/spain.gif",
+        still_url: "/some/path/to/spain.png",
         deactivated: false,
         author_id: test_user.user_id,
     },
@@ -239,10 +240,17 @@ exports.fixtures = {
         value: 1,
     },
 
-    realm__update__create_stream_policy: {
+    realm__update__create_private_stream_policy: {
         type: "realm",
         op: "update",
-        property: "create_stream_policy",
+        property: "create_private_stream_policy",
+        value: 2,
+    },
+
+    realm__update__create_public_stream_policy: {
+        type: "realm",
+        op: "update",
+        property: "create_public_stream_policy",
         value: 2,
     },
 
@@ -251,13 +259,6 @@ exports.fixtures = {
         op: "update",
         property: "default_code_block_language",
         value: "javascript",
-    },
-
-    realm__update__default_twenty_four_hour_time: {
-        type: "realm",
-        op: "update",
-        property: "default_twenty_four_hour_time",
-        value: false,
     },
 
     realm__update__disallow_disposable_email_addresses: {
@@ -515,6 +516,27 @@ exports.fixtures = {
             user_id: test_user.user_id,
             full_name: "Bob NewName",
         },
+    },
+
+    realm_user_settings_defaults__emojiset: {
+        type: "realm_user_settings_defaults",
+        op: "update",
+        property: "emojiset",
+        value: "google",
+    },
+
+    realm_user_settings_defaults__notification_sound: {
+        type: "realm_user_settings_defaults",
+        op: "update",
+        property: "notification_sound",
+        value: "ding",
+    },
+
+    realm_user_settings_defaults__presence_enabled: {
+        type: "realm_user_settings_defaults",
+        op: "update",
+        property: "presence_enabled",
+        value: false,
     },
 
     restart: {
@@ -794,6 +816,13 @@ exports.fixtures = {
         op: "update",
         property: "left_side_userlist",
         value: true,
+    },
+
+    user_settings__presence_enabled: {
+        type: "user_settings",
+        op: "update",
+        property: "presence_enabled",
+        value: false,
     },
 
     user_settings__starred_message_counts: {

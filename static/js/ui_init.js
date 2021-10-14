@@ -56,6 +56,7 @@ import * as popover_menus from "./popover_menus";
 import * as presence from "./presence";
 import * as realm_logo from "./realm_logo";
 import * as realm_playground from "./realm_playground";
+import * as realm_user_settings_defaults from "./realm_user_settings_defaults";
 import * as recent_topics_util from "./recent_topics_util";
 import * as reload from "./reload";
 import * as resize from "./resize";
@@ -68,7 +69,9 @@ import * as server_events from "./server_events";
 import * as settings from "./settings";
 import * as settings_data from "./settings_data";
 import * as settings_display from "./settings_display";
+import * as settings_notifications from "./settings_notifications";
 import * as settings_panel_menu from "./settings_panel_menu";
+import * as settings_realm_user_settings_defaults from "./settings_realm_user_settings_defaults";
 import * as settings_sections from "./settings_sections";
 import * as settings_toggle from "./settings_toggle";
 import * as spoilers from "./spoilers";
@@ -150,6 +153,26 @@ function initialize_right_sidebar() {
     });
 
     $("#right-sidebar-container").html(rendered_sidebar);
+
+    $("#user_presences").on("mouseenter", ".user_sidebar_entry", (e) => {
+        const status_emoji = $(e.target).closest(".user_sidebar_entry").find("img.status_emoji");
+        if (status_emoji.length) {
+            const animated_url = status_emoji.data("animated-url");
+            if (animated_url) {
+                status_emoji.attr("src", animated_url);
+            }
+        }
+    });
+
+    $("#user_presences").on("mouseleave", ".user_sidebar_entry", (e) => {
+        const status_emoji = $(e.target).closest(".user_sidebar_entry").find("img.status_emoji");
+        if (status_emoji.length) {
+            const still_url = status_emoji.data("still-url");
+            if (still_url) {
+                status_emoji.attr("src", still_url);
+            }
+        }
+    });
 }
 
 function initialize_navbar() {
@@ -495,12 +518,14 @@ export function initialize_everything() {
     const user_status_params = pop_fields("user_status");
     const i18n_params = pop_fields("language_list");
     const user_settings_params = pop_fields("user_settings");
+    const realm_settings_defaults_params = pop_fields("realm_user_settings_defaults");
 
     i18n.initialize(i18n_params);
     tippyjs.initialize();
     popover_menus.initialize();
 
     initialize_user_settings(user_settings_params);
+    realm_user_settings_defaults.initialize(realm_settings_defaults_params);
     people.initialize(page_params.user_id, people_params);
 
     let date_joined;
@@ -579,6 +604,8 @@ export function initialize_everything() {
     giphy.initialize();
     presence.initialize(presence_params);
     settings_display.initialize();
+    settings_notifications.initialize();
+    settings_realm_user_settings_defaults.initialize();
     settings_panel_menu.initialize();
     settings_sections.initialize();
     settings_toggle.initialize();

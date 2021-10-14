@@ -35,6 +35,7 @@ from django.db.models.query import QuerySet
 from django.utils.html import escape
 from django.utils.timezone import now as timezone_now
 from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy
 from django.utils.translation import override as override_language
 from psycopg2.extras import execute_values
 from psycopg2.sql import SQL
@@ -150,6 +151,7 @@ from zerver.lib.streams import (
     check_stream_name,
     create_stream_if_needed,
     get_default_value_for_history_public_to_subscribers,
+    get_web_public_streams_queryset,
     render_stream_description,
     send_stream_creation_event,
     subscribed_to_stream,
@@ -169,7 +171,7 @@ from zerver.lib.topic import (
     update_messages_for_topic_edit,
 )
 from zerver.lib.topic_mutes import add_topic_mute, get_topic_mutes, remove_topic_mute
-from zerver.lib.types import ProfileFieldData
+from zerver.lib.types import ProfileDataElementValue, ProfileFieldData
 from zerver.lib.upload import (
     claim_attachment,
     delete_avatar_image,
@@ -210,9 +212,11 @@ from zerver.models import (
     RealmEmoji,
     RealmFilter,
     RealmPlayground,
+    RealmUserDefault,
     Recipient,
     ScheduledEmail,
     ScheduledMessage,
+    ScheduledMessageNotificationEmail,
     Service,
     Stream,
     SubMessage,
@@ -1008,6 +1012,44 @@ def do_set_realm_signup_notifications_stream(
     send_event(realm, event, active_user_ids(realm.id))
 
 
+def do_set_realm_user_default_setting(
+    realm_user_default: RealmUserDefault,
+    name: str,
+    value: Any,
+    *,
+    acting_user: Optional[UserProfile],
+) -> None:
+    old_value = getattr(realm_user_default, name)
+    realm = realm_user_default.realm
+    event_time = timezone_now()
+
+    with transaction.atomic(savepoint=False):
+        setattr(realm_user_default, name, value)
+        realm_user_default.save(update_fields=[name])
+
+        RealmAuditLog.objects.create(
+            realm=realm,
+            event_type=RealmAuditLog.REALM_DEFAULT_USER_SETTINGS_CHANGED,
+            event_time=event_time,
+            acting_user=acting_user,
+            extra_data=orjson.dumps(
+                {
+                    RealmAuditLog.OLD_VALUE: old_value,
+                    RealmAuditLog.NEW_VALUE: value,
+                    "property": name,
+                }
+            ).decode(),
+        )
+
+    event = dict(
+        type="realm_user_settings_defaults",
+        op="update",
+        property=name,
+        value=value,
+    )
+    send_event(realm, event, active_user_ids(realm.id))
+
+
 def do_deactivate_realm(realm: Realm, *, acting_user: Optional[UserProfile]) -> None:
     """
     Deactivate this realm. Do NOT deactivate the users -- we need to be able to
@@ -1074,10 +1116,21 @@ def do_reactivate_realm(realm: Realm) -> None:
 def do_change_realm_subdomain(
     realm: Realm, new_subdomain: str, *, acting_user: Optional[UserProfile]
 ) -> None:
+    """Changing a realm's subdomain is a highly disruptive operation,
+    because all existing clients will need to be updated to point to
+    the new URL.  Further, requests to fetch data frmo existing event
+    queues will fail with an authentication error when this change
+    happens (because the old subdomain is no longer associated with
+    the realm), making it hard for us to provide a graceful update
+    experience for clients.
+    """
     old_subdomain = realm.subdomain
     old_uri = realm.uri
+    # If the realm had been a demo organization scheduled for
+    # deleting, clear that state.
+    realm.demo_organization_scheduled_deletion_date = None
     realm.string_id = new_subdomain
-    realm.save(update_fields=["string_id"])
+    realm.save(update_fields=["string_id", "demo_organization_scheduled_deletion_date"])
     RealmAuditLog.objects.create(
         realm=realm,
         event_type=RealmAuditLog.REALM_SUBDOMAIN_CHANGED,
@@ -1096,7 +1149,7 @@ def do_change_realm_subdomain(
     # deactivated. We are creating a deactivated realm using old subdomain and setting
     # it's deactivated redirect to new_subdomain so that we can tell the users that
     # the realm has been moved to a new subdomain.
-    placeholder_realm = do_create_realm(old_subdomain, "placeholder-realm")
+    placeholder_realm = do_create_realm(old_subdomain, realm.name)
     do_deactivate_realm(placeholder_realm, acting_user=None)
     do_add_deactivated_redirect(placeholder_realm, realm.uri)
 
@@ -4540,6 +4593,24 @@ def do_change_logo_source(
     send_event(realm, event, active_user_ids(realm.id))
 
 
+def do_change_realm_org_type(
+    realm: Realm,
+    org_type: int,
+    acting_user: Optional[UserProfile],
+) -> None:
+    old_value = realm.org_type
+    realm.org_type = org_type
+    realm.save(update_fields=["org_type"])
+
+    RealmAuditLog.objects.create(
+        event_type=RealmAuditLog.REALM_ORG_TYPE_CHANGED,
+        realm=realm,
+        event_time=timezone_now(),
+        acting_user=acting_user,
+        extra_data={"old_value": old_value, "new_value": org_type},
+    )
+
+
 def do_change_plan_type(
     realm: Realm, plan_type: int, *, acting_user: Optional[UserProfile]
 ) -> None:
@@ -4782,6 +4853,35 @@ def do_make_stream_web_public(stream: Stream) -> None:
     stream.history_public_to_subscribers = True
     stream.save(update_fields=["invite_only", "history_public_to_subscribers", "is_web_public"])
 
+    # We reuse "invite_only" stream update API route here because
+    # both are similar events and similar UI updates will be required
+    # by the client to update this property for the user.
+    event = dict(
+        op="update",
+        type="stream",
+        property="invite_only",
+        value=False,
+        history_public_to_subscribers=True,
+        is_web_public=True,
+        stream_id=stream.id,
+        name=stream.name,
+    )
+    send_event(stream.realm, event, can_access_stream_user_ids(stream))
+
+
+def do_change_stream_permission(
+    stream: Stream,
+    invite_only: Optional[bool] = None,
+    history_public_to_subscribers: Optional[bool] = None,
+    is_web_public: Optional[bool] = None,
+) -> None:
+    # TODO: Ideally this would be just merged with do_change_stream_invite_only.
+    if is_web_public:
+        do_make_stream_web_public(stream)
+    else:
+        assert invite_only is not None
+        do_change_stream_invite_only(stream, invite_only, history_public_to_subscribers)
+
 
 def do_change_stream_post_policy(stream: Stream, stream_post_policy: int) -> None:
     stream.stream_post_policy = stream_post_policy
@@ -4921,6 +5021,36 @@ def do_change_stream_message_retention_days(
     send_event(stream.realm, event, can_access_stream_user_ids(stream))
 
 
+def set_realm_permissions_based_on_org_type(realm: Realm) -> None:
+    """This function implements overrides for the default configuration
+    for new organizations when the administrator selected specific
+    organization types.
+
+    This substantially simplifies our /help/ advice for folks setting
+    up new organizations of these types.
+    """
+
+    # Custom configuration for educational organizations.  The present
+    # defaults are designed for a single class, not a department or
+    # larger institution, since those are more common.
+    if (
+        realm.org_type == Realm.ORG_TYPES["education_nonprofit"]["id"]
+        or realm.org_type == Realm.ORG_TYPES["education"]["id"]
+    ):
+        # Limit email address visibility and user creation to administrators.
+        realm.email_address_visibility = Realm.EMAIL_ADDRESS_VISIBILITY_ADMINS
+        realm.invite_to_realm_policy = Realm.POLICY_ADMINS_ONLY
+        # Restrict public stream creation to staff, but allow private
+        # streams (useful for study groups, etc.).
+        realm.create_public_stream_policy = Realm.POLICY_ADMINS_ONLY
+        # Don't allow members (students) to manage user groups or
+        # stream subscriptions.
+        realm.user_group_edit_policy = Realm.POLICY_MODERATORS_ONLY
+        realm.invite_to_stream_policy = Realm.POLICY_MODERATORS_ONLY
+        # Allow moderators (TAs?) to move topics between streams.
+        realm.move_messages_between_streams_policy = Realm.POLICY_MODERATORS_ONLY
+
+
 def do_create_realm(
     string_id: str,
     name: str,
@@ -4934,6 +5064,8 @@ def do_create_realm(
     date_created: Optional[datetime.datetime] = None,
     is_demo_organization: Optional[bool] = False,
 ) -> Realm:
+    if string_id == settings.SOCIAL_AUTH_SUBDOMAIN:
+        raise AssertionError("Creating a realm on SOCIAL_AUTH_SUBDOMAIN is not allowed!")
     if Realm.objects.filter(string_id=string_id).exists():
         raise AssertionError(f"Realm {string_id} already exists!")
     if not server_initialized():
@@ -4964,13 +5096,17 @@ def do_create_realm(
         realm = Realm(string_id=string_id, name=name, **kwargs)
         if is_demo_organization:
             realm.demo_organization_scheduled_deletion_date = (
-                realm.date_created + datetime.timedelta(days=30)
+                realm.date_created + datetime.timedelta(days=settings.DEMO_ORG_DEADLINE_DAYS)
             )
+
+        set_realm_permissions_based_on_org_type(realm)
         realm.save()
 
         RealmAuditLog.objects.create(
             realm=realm, event_type=RealmAuditLog.REALM_CREATED, event_time=realm.date_created
         )
+
+        RealmUserDefault.objects.create(realm=realm)
 
     # Create stream once Realm object has been saved
     notifications_stream = ensure_stream(
@@ -5021,75 +5157,70 @@ def do_create_realm(
     return realm
 
 
-def do_change_notification_settings(
+def update_scheduled_email_notifications_time(
+    user_profile: UserProfile, old_batching_period: int, new_batching_period: int
+) -> None:
+    existing_scheduled_emails = ScheduledMessageNotificationEmail.objects.filter(
+        user_profile=user_profile
+    )
+
+    scheduled_timestamp_change = datetime.timedelta(
+        seconds=new_batching_period
+    ) - datetime.timedelta(seconds=old_batching_period)
+
+    existing_scheduled_emails.update(
+        scheduled_timestamp=F("scheduled_timestamp") + scheduled_timestamp_change
+    )
+
+
+def do_change_user_setting(
     user_profile: UserProfile,
-    name: str,
-    value: Union[bool, int, str],
+    setting_name: str,
+    setting_value: Union[bool, str, int],
     *,
     acting_user: Optional[UserProfile],
 ) -> None:
-    """Takes in a UserProfile object, the name of a global notification
-    preference to update, and the value to update to
-    """
-
-    old_value = getattr(user_profile, name)
-    notification_setting_type = UserProfile.notification_setting_types[name]
-    assert isinstance(
-        value, notification_setting_type
-    ), f"Cannot update {name}: {value} is not an instance of {notification_setting_type}"
-
-    setattr(user_profile, name, value)
-
-    # Disabling digest emails should clear a user's email queue
-    if name == "enable_digest_emails" and not value:
-        clear_scheduled_emails(user_profile.id, ScheduledEmail.DIGEST)
-
-    user_profile.save(update_fields=[name])
-    event = {
-        "type": "user_settings",
-        "op": "update",
-        "property": name,
-        "value": value,
-    }
+    old_value = getattr(user_profile, setting_name)
     event_time = timezone_now()
-    RealmAuditLog.objects.create(
-        realm=user_profile.realm,
-        event_type=RealmAuditLog.USER_NOTIFICATION_SETTINGS_CHANGED,
-        event_time=event_time,
-        acting_user=acting_user,
-        modified_user=user_profile,
-        extra_data=orjson.dumps(
-            {
-                RealmAuditLog.OLD_VALUE: old_value,
-                RealmAuditLog.NEW_VALUE: value,
-                "property": name,
-            }
-        ).decode(),
-    )
 
-    send_event(user_profile.realm, event, [user_profile.id])
-
-    # This legacy event format is for backwards-compatiblity with
-    # clients that don't support the new user_settings event type.
-    legacy_event = {
-        "type": "update_global_notifications",
-        "user": user_profile.email,
-        "notification_name": name,
-        "setting": value,
-    }
-    send_event(user_profile.realm, legacy_event, [user_profile.id])
-
-
-def do_set_user_display_setting(
-    user_profile: UserProfile, setting_name: str, setting_value: Union[bool, str, int]
-) -> None:
     if setting_name == "timezone":
         assert isinstance(setting_value, str)
     else:
         property_type = UserProfile.property_types[setting_name]
         assert isinstance(setting_value, property_type)
     setattr(user_profile, setting_name, setting_value)
+
+    # TODO: Move these database actions into a transaction.atomic block.
     user_profile.save(update_fields=[setting_name])
+
+    if setting_name in UserProfile.notification_setting_types:
+        # Prior to all personal settings being managed by property_types,
+        # these were only created for notification settings.
+        #
+        # TODO: Start creating these for all settings, and do a
+        # backfilled=True migration.
+        RealmAuditLog.objects.create(
+            realm=user_profile.realm,
+            event_type=RealmAuditLog.USER_SETTING_CHANGED,
+            event_time=event_time,
+            acting_user=acting_user,
+            modified_user=user_profile,
+            extra_data=orjson.dumps(
+                {
+                    RealmAuditLog.OLD_VALUE: old_value,
+                    RealmAuditLog.NEW_VALUE: setting_value,
+                    "property": setting_name,
+                }
+            ).decode(),
+        )
+    # Disabling digest emails should clear a user's email queue
+    if setting_name == "enable_digest_emails" and not setting_value:
+        clear_scheduled_emails(user_profile.id, ScheduledEmail.DIGEST)
+
+    if setting_name == "email_notifications_batching_period_seconds":
+        assert isinstance(old_value, int)
+        assert isinstance(setting_value, int)
+        update_scheduled_email_notifications_time(user_profile, old_value, setting_value)
 
     event = {
         "type": "user_settings",
@@ -5103,19 +5234,33 @@ def do_set_user_display_setting(
 
     send_event(user_profile.realm, event, [user_profile.id])
 
-    # This legacy event format is for backwards-compatiblity with
-    # clients that don't support the new user_settings event type.
-    legacy_event = {
-        "type": "update_display_settings",
-        "user": user_profile.email,
-        "setting_name": setting_name,
-        "setting": setting_value,
-    }
-    if setting_name == "default_language":
-        assert isinstance(setting_value, str)
-        legacy_event["language_name"] = get_language_name(setting_value)
+    if setting_name in UserProfile.notification_settings_legacy:
+        # This legacy event format is for backwards-compatiblity with
+        # clients that don't support the new user_settings event type.
+        # We only send this for settings added before Feature level 89.
+        legacy_event = {
+            "type": "update_global_notifications",
+            "user": user_profile.email,
+            "notification_name": setting_name,
+            "setting": setting_value,
+        }
+        send_event(user_profile.realm, legacy_event, [user_profile.id])
 
-    send_event(user_profile.realm, legacy_event, [user_profile.id])
+    if setting_name in UserProfile.display_settings_legacy or setting_name == "timezone":
+        # This legacy event format is for backwards-compatiblity with
+        # clients that don't support the new user_settings event type.
+        # We only send this for settings added before Feature level 89.
+        legacy_event = {
+            "type": "update_display_settings",
+            "user": user_profile.email,
+            "setting_name": setting_name,
+            "setting": setting_value,
+        }
+        if setting_name == "default_language":
+            assert isinstance(setting_value, str)
+            legacy_event["language_name"] = get_language_name(setting_value)
+
+        send_event(user_profile.realm, legacy_event, [user_profile.id])
 
     # Updates to the timezone display setting are sent to all users
     if setting_name == "timezone":
@@ -5803,15 +5948,14 @@ def maybe_send_resolve_topic_notifications(
     if old_topic.lstrip(RESOLVED_TOPIC_PREFIX) != new_topic.lstrip(RESOLVED_TOPIC_PREFIX):
         return
 
-    if new_topic.startswith(RESOLVED_TOPIC_PREFIX) and not old_topic.startswith(
+    topic_resolved: bool = new_topic.startswith(RESOLVED_TOPIC_PREFIX) and not old_topic.startswith(
         RESOLVED_TOPIC_PREFIX
-    ):
-        notification_string = _("{user} has marked this topic as resolved.")
-    elif old_topic.startswith(RESOLVED_TOPIC_PREFIX) and not new_topic.startswith(
+    )
+    topic_unresolved: bool = old_topic.startswith(
         RESOLVED_TOPIC_PREFIX
-    ):
-        notification_string = _("{user} has marked this topic as unresolved.")
-    else:
+    ) and not new_topic.startswith(RESOLVED_TOPIC_PREFIX)
+
+    if not topic_resolved and not topic_unresolved:
         # If there's some other weird topic that does not toggle the
         # state of "topic starts with RESOLVED_TOPIC_PREFIX", we do
         # nothing. Any other logic could result in cases where we send
@@ -5830,6 +5974,11 @@ def maybe_send_resolve_topic_notifications(
     sender = get_system_bot(settings.NOTIFICATION_BOT, user_profile.realm_id)
     user_mention = f"@_**{user_profile.full_name}|{user_profile.id}**"
     with override_language(stream.realm.default_language):
+        if topic_resolved:
+            notification_string = _("{user} has marked this topic as resolved.")
+        elif topic_unresolved:
+            notification_string = _("{user} has marked this topic as unresolved.")
+
         internal_send_stream_message(
             sender,
             stream,
@@ -6370,11 +6519,13 @@ def do_update_message(
         # Notify users that the topic was moved.
         old_thread_notification_string = None
         if send_notification_to_old_thread:
-            old_thread_notification_string = _("This topic was moved by {user} to {new_location}")
+            old_thread_notification_string = gettext_lazy(
+                "This topic was moved by {user} to {new_location}"
+            )
 
         new_thread_notification_string = None
         if send_notification_to_new_thread:
-            new_thread_notification_string = _(
+            new_thread_notification_string = gettext_lazy(
                 "This topic was moved here from {old_location} by {user}"
             )
 
@@ -6510,7 +6661,7 @@ def get_web_public_subs(realm: Realm) -> SubscriptionInfo:
         return color
 
     subscribed = []
-    for stream in Stream.objects.filter(realm=realm, is_web_public=True, deactivated=False):
+    for stream in get_web_public_streams_queryset(realm):
         stream_dict = stream.to_dict()
 
         # Add versions of the Subscription fields based on a simulated
@@ -6812,12 +6963,17 @@ def filter_presence_idle_user_ids(user_ids: Set[int]) -> List[int]:
 
 
 def do_send_confirmation_email(
-    invitee: PreregistrationUser, referrer: UserProfile, email_language: str
+    invitee: PreregistrationUser,
+    referrer: UserProfile,
+    email_language: str,
+    invite_expires_in_days: Optional[int] = None,
 ) -> str:
     """
     Send the confirmation/welcome e-mail to an invited user.
     """
-    activation_url = create_confirmation_link(invitee, Confirmation.INVITATION)
+    activation_url = create_confirmation_link(
+        invitee, Confirmation.INVITATION, validity_in_days=invite_expires_in_days
+    )
     context = {
         "referrer_full_name": referrer.full_name,
         "referrer_email": referrer.delivery_email,
@@ -6900,6 +7056,8 @@ def do_invite_users(
     user_profile: UserProfile,
     invitee_emails: Collection[str],
     streams: Collection[Stream],
+    *,
+    invite_expires_in_days: int,
     invite_as: int = PreregistrationUser.INVITE_AS["MEMBER"],
 ) -> None:
     num_invites = len(invitee_emails)
@@ -6994,6 +7152,7 @@ def do_invite_users(
             "prereg_id": prereg_user.id,
             "referrer_id": user_profile.id,
             "email_language": user_profile.realm.default_language,
+            "invite_expires_in_days": invite_expires_in_days,
         }
         queue_json_publish("invites", event)
 
@@ -7023,11 +7182,13 @@ def do_get_user_invites(user_profile: UserProfile) -> List[Dict[str, Any]]:
     invites = []
 
     for invitee in prereg_users:
+        expiry_date = invitee.confirmation.get().expiry_date
         invites.append(
             dict(
                 email=invitee.email,
                 invited_by_user_id=invitee.referred_by.id,
                 invited=datetime_to_timestamp(invitee.invited_at),
+                expiry_date=datetime_to_timestamp(expiry_date),
                 id=invitee.id,
                 invited_as=invitee.invited_as,
                 is_multiuse=False,
@@ -7038,11 +7199,8 @@ def do_get_user_invites(user_profile: UserProfile) -> List[Dict[str, Any]]:
         # We do not return multiuse invites to non-admin users.
         return invites
 
-    lowest_datetime = timezone_now() - datetime.timedelta(
-        days=settings.INVITATION_LINK_VALIDITY_DAYS
-    )
     multiuse_confirmation_objs = Confirmation.objects.filter(
-        realm=user_profile.realm, type=Confirmation.MULTIUSE_INVITE, date_sent__gte=lowest_datetime
+        realm=user_profile.realm, type=Confirmation.MULTIUSE_INVITE, expiry_date__gte=timezone_now()
     )
     for confirmation_obj in multiuse_confirmation_objs:
         invite = confirmation_obj.content_object
@@ -7051,6 +7209,7 @@ def do_get_user_invites(user_profile: UserProfile) -> List[Dict[str, Any]]:
             dict(
                 invited_by_user_id=invite.referred_by.id,
                 invited=datetime_to_timestamp(confirmation_obj.date_sent),
+                expiry_date=datetime_to_timestamp(confirmation_obj.expiry_date),
                 id=invite.id,
                 link_url=confirmation_url(
                     confirmation_obj.confirmation_key,
@@ -7065,7 +7224,10 @@ def do_get_user_invites(user_profile: UserProfile) -> List[Dict[str, Any]]:
 
 
 def do_create_multiuse_invite_link(
-    referred_by: UserProfile, invited_as: int, streams: Sequence[Stream] = []
+    referred_by: UserProfile,
+    invited_as: int,
+    invite_expires_in_days: int,
+    streams: Sequence[Stream] = [],
 ) -> str:
     realm = referred_by.realm
     invite = MultiuseInvite.objects.create(realm=realm, referred_by=referred_by)
@@ -7074,7 +7236,9 @@ def do_create_multiuse_invite_link(
     invite.invited_as = invited_as
     invite.save()
     notify_invites_changed(referred_by)
-    return create_confirmation_link(invite, Confirmation.MULTIUSE_INVITE)
+    return create_confirmation_link(
+        invite, Confirmation.MULTIUSE_INVITE, validity_in_days=invite_expires_in_days
+    )
 
 
 def do_revoke_user_invite(prereg_user: PreregistrationUser) -> None:
@@ -7107,6 +7271,10 @@ def do_resend_user_invite_email(prereg_user: PreregistrationUser) -> int:
 
     prereg_user.invited_at = timezone_now()
     prereg_user.save()
+    invite_expires_in_days = (
+        prereg_user.confirmation.get().expiry_date - prereg_user.invited_at
+    ).days
+    prereg_user.confirmation.clear()
 
     do_increment_logging_stat(
         prereg_user.realm, COUNT_STATS["invites_sent::day"], None, prereg_user.invited_at
@@ -7118,6 +7286,7 @@ def do_resend_user_invite_email(prereg_user: PreregistrationUser) -> int:
         "prereg_id": prereg_user.id,
         "referrer_id": prereg_user.referred_by.id,
         "email_language": prereg_user.referred_by.realm.default_language,
+        "invite_expires_in_days": invite_expires_in_days,
     }
     queue_json_publish("invites", event)
 
@@ -7143,8 +7312,9 @@ def check_add_realm_emoji(
     emoji_file_name = mark_sanitized(emoji_file_name)
 
     emoji_uploaded_successfully = False
+    is_animated = False
     try:
-        upload_emoji_image(image_file, emoji_file_name, author)
+        is_animated = upload_emoji_image(image_file, emoji_file_name, author)
         emoji_uploaded_successfully = True
     finally:
         if not emoji_uploaded_successfully:
@@ -7152,7 +7322,8 @@ def check_add_realm_emoji(
             return None
         else:
             realm_emoji.file_name = emoji_file_name
-            realm_emoji.save(update_fields=["file_name"])
+            realm_emoji.is_animated = is_animated
+            realm_emoji.save(update_fields=["file_name", "is_animated"])
             notify_realm_emoji(realm_emoji.realm)
     return realm_emoji
 
@@ -7377,7 +7548,7 @@ def get_occupied_streams(realm: Realm) -> QuerySet:
 
 
 def get_web_public_streams(realm: Realm) -> List[Dict[str, Any]]:  # nocoverage
-    query = Stream.objects.filter(realm=realm, deactivated=False, is_web_public=True)
+    query = get_web_public_streams_queryset(realm)
     streams = Stream.get_client_data(query)
     return streams
 
@@ -7423,7 +7594,13 @@ def do_get_streams(
             invite_only_check = Q(invite_only=False)
             add_filter_option(invite_only_check)
         if include_web_public:
-            web_public_check = Q(is_web_public=True)
+            # This should match get_web_public_streams_queryset
+            web_public_check = Q(
+                is_web_public=True,
+                invite_only=False,
+                history_public_to_subscribers=True,
+                deactivated=False,
+            )
             add_filter_option(web_public_check)
         if include_owner_subscribed and user_profile.is_bot:
             bot_owner = user_profile.bot_owner
@@ -7625,11 +7802,8 @@ def try_reorder_realm_custom_profile_fields(realm: Realm, order: List[int]) -> N
 def notify_user_update_custom_profile_data(
     user_profile: UserProfile, field: Dict[str, Union[int, str, List[int], None]]
 ) -> None:
-    data = dict(id=field["id"])
-    if field["type"] == CustomProfileField.USER:
-        data["value"] = orjson.dumps(field["value"]).decode()
-    else:
-        data["value"] = field["value"]
+    data = dict(id=field["id"], value=field["value"])
+
     if field["rendered_value"]:
         data["rendered_value"] = field["rendered_value"]
     payload = dict(user_id=user_profile.id, custom_profile_field=data)
@@ -7639,7 +7813,7 @@ def notify_user_update_custom_profile_data(
 
 def do_update_user_custom_profile_data_if_changed(
     user_profile: UserProfile,
-    data: List[Dict[str, Union[int, str, List[int]]]],
+    data: List[Dict[str, Union[int, ProfileDataElementValue]]],
 ) -> None:
     with transaction.atomic():
         for custom_profile_field in data:
@@ -7647,17 +7821,24 @@ def do_update_user_custom_profile_data_if_changed(
                 user_profile=user_profile, field_id=custom_profile_field["id"]
             )
 
-            if not created and field_value.value == str(custom_profile_field["value"]):
+            # field_value.value is a TextField() so we need to have field["value"]
+            # in string form to correctly make comparisons and assignments.
+            if isinstance(custom_profile_field["value"], str):
+                custom_profile_field_value_string = custom_profile_field["value"]
+            else:
+                custom_profile_field_value_string = orjson.dumps(
+                    custom_profile_field["value"]
+                ).decode()
+
+            if not created and field_value.value == custom_profile_field_value_string:
                 # If the field value isn't actually being changed to a different one,
                 # we have nothing to do here for this field.
-                # Note: field_value.value is a TextField() so we need to cast field['value']
-                # to a string for the comparison in this if.
                 continue
 
-            field_value.value = custom_profile_field["value"]
+            field_value.value = custom_profile_field_value_string
             if field_value.field.is_renderable():
                 field_value.rendered_value = render_stream_description(
-                    str(custom_profile_field["value"])
+                    custom_profile_field_value_string
                 )
                 field_value.save(update_fields=["value", "rendered_value"])
             else:

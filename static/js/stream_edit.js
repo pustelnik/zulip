@@ -485,7 +485,8 @@ export function is_notification_setting(setting_label) {
 
 export function stream_settings(sub) {
     const settings_labels = settings_config.general_notifications_table_labels.stream;
-    const check_realm_setting = settings_config.all_notifications().show_push_notifications_tooltip;
+    const check_realm_setting =
+        settings_config.all_notifications(user_settings).show_push_notifications_tooltip;
 
     const settings = Object.keys(settings_labels).map((setting) => {
         const ret = {
@@ -663,24 +664,45 @@ function change_stream_privacy(e) {
 
     let invite_only;
     let history_public_to_subscribers;
+    let is_web_public;
 
-    if (privacy_setting === stream_data.stream_privacy_policy_values.public.code) {
-        invite_only = false;
-        history_public_to_subscribers = true;
-    } else if (privacy_setting === stream_data.stream_privacy_policy_values.private.code) {
-        invite_only = true;
-        history_public_to_subscribers = false;
-    } else {
-        invite_only = true;
-        history_public_to_subscribers = true;
+    switch (privacy_setting) {
+        case stream_data.stream_privacy_policy_values.public.code: {
+            invite_only = false;
+            history_public_to_subscribers = true;
+            is_web_public = false;
+
+            break;
+        }
+        case stream_data.stream_privacy_policy_values.private.code: {
+            invite_only = true;
+            history_public_to_subscribers = false;
+            is_web_public = false;
+
+            break;
+        }
+        case stream_data.stream_privacy_policy_values.web_public.code: {
+            invite_only = false;
+            history_public_to_subscribers = true;
+            is_web_public = true;
+
+            break;
+        }
+        default: {
+            invite_only = true;
+            history_public_to_subscribers = true;
+            is_web_public = false;
+        }
     }
 
     if (
         sub.invite_only !== invite_only ||
-        sub.history_public_to_subscribers !== history_public_to_subscribers
+        sub.history_public_to_subscribers !== history_public_to_subscribers ||
+        sub.is_web_public !== is_web_public
     ) {
         data.is_private = JSON.stringify(invite_only);
         data.history_public_to_subscribers = JSON.stringify(history_public_to_subscribers);
+        data.is_web_public = JSON.stringify(is_web_public);
     }
 
     let message_retention_days = $(

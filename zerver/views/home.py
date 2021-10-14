@@ -3,22 +3,22 @@ import secrets
 from typing import List, Optional, Tuple
 
 from django.conf import settings
-from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
+from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
-from django.urls import reverse
 from django.utils.cache import patch_cache_control
 
 from zerver.context_processors import get_valid_realm_from_request
-from zerver.decorator import web_public_view, zulip_login_required
+from zerver.decorator import web_public_view, zulip_login_required, zulip_redirect_to_login
 from zerver.forms import ToSForm
 from zerver.lib.actions import do_change_tos_version, realm_user_count
 from zerver.lib.compatibility import is_outdated_desktop_app, is_unsupported_browser
 from zerver.lib.home import build_page_params_for_home_page_load, get_user_permission_info
-from zerver.lib.request import get_request_notes
+from zerver.lib.request import RequestNotes
 from zerver.lib.streams import access_stream_by_name
 from zerver.lib.subdomains import get_subdomain
 from zerver.lib.utils import statsd
 from zerver.models import PreregistrationUser, Realm, Stream, UserProfile
+from zerver.views.auth import get_safe_redirect_to
 from zerver.views.portico import hello_view
 
 
@@ -149,9 +149,33 @@ def home_real(request: HttpRequest) -> HttpResponse:
         user_profile = request.user
         realm = user_profile.realm
     else:
-        # user_profile=None corresponds to the logged-out "web_public" visitor case.
-        user_profile = None
         realm = get_valid_realm_from_request(request)
+
+        # TODO: Ideally, we'd open Zulip directly as a spectator if
+        # the URL had clicked a link to content on a web-public
+        # stream.  We could maybe do this by parsing `next`, but it's
+        # not super convenient with Zulip's hash-based URL scheme.
+
+        # The "Access without an account" button on the login page
+        # submits a POST to this page with this hidden field set.
+        if request.POST.get("prefers_web_public_view") == "true":
+            request.session["prefers_web_public_view"] = True
+            # We serve a redirect here, rather than serving a page, to
+            # avoid browser "Confirm form resubmission" prompts on reload.
+            redirect_to = get_safe_redirect_to(request.POST.get("next"), realm.uri)
+            return redirect(redirect_to)
+
+        prefers_web_public_view = request.session.get("prefers_web_public_view")
+        if not prefers_web_public_view:
+            # For users who haven't opted into the spectator
+            # experience, we redirect to the login page.
+            return zulip_redirect_to_login(request, settings.HOME_NOT_LOGGED_IN)
+
+        # For users who have selected public access, we load the
+        # spectator experience.  We fall through to the shared code
+        # for loading the application, with user_profile=None encoding
+        # that we're a spectator, not a logged-in user.
+        user_profile = None
 
     update_last_reminder(user_profile)
 
@@ -192,7 +216,7 @@ def home_real(request: HttpRequest) -> HttpResponse:
         needs_tutorial=needs_tutorial,
     )
 
-    log_data = get_request_notes(request).log_data
+    log_data = RequestNotes.get_notes(request).log_data
     assert log_data is not None
     log_data["extra"] = f"[{queue_id}]"
 
@@ -216,4 +240,4 @@ def home_real(request: HttpRequest) -> HttpResponse:
 
 @zulip_login_required
 def desktop_home(request: HttpRequest) -> HttpResponse:
-    return HttpResponseRedirect(reverse(home))
+    return redirect(home)

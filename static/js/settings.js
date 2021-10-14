@@ -1,5 +1,4 @@
 import {parseISO} from "date-fns";
-import Handlebars from "handlebars/runtime";
 import $ from "jquery";
 
 import timezones from "../generated/timezones.json";
@@ -46,46 +45,21 @@ $("body").ready(() => {
 function setup_settings_label() {
     settings_label = {
         // settings_notification
-        enable_online_push_notifications: $t({
-            defaultMessage: "Send mobile notifications even if I'm online (useful for testing)",
-        }),
-        pm_content_in_desktop_notifications: $t({
-            defaultMessage: "Include content of private messages in desktop notifications",
-        }),
-        desktop_icon_count_display: $t({
-            defaultMessage: "Unread count summary (appears in desktop sidebar and browser tab)",
-        }),
-        enable_digest_emails: $t({defaultMessage: "Send digest emails when I'm away"}),
-        enable_login_emails: $t({
-            defaultMessage: "Send email notifications for new logins to my account",
-        }),
-        enable_marketing_emails: $t({
-            defaultMessage: "Send me Zulip's low-traffic newsletter (a few times a year)",
-        }),
-        message_content_in_email_notifications: $t({
-            defaultMessage: "Include message content in message notification emails",
-        }),
-        realm_name_in_notifications: $t({
-            defaultMessage: "Include organization name in subject of message notification emails",
-        }),
         presence_enabled: $t({
             defaultMessage: "Display my availability to other users when online",
         }),
-
-        // display settings
-        dense_mode: $t({defaultMessage: "Dense mode"}),
-        fluid_layout_width: $t({defaultMessage: "Use full width on wide screens"}),
-        high_contrast_mode: $t({defaultMessage: "High contrast mode"}),
-        left_side_userlist: $t({
-            defaultMessage: "Show user list on left sidebar in narrow windows",
+        send_stream_typing_notifications: $t({
+            defaultMessage: "Let subscribers see when I'm typing messages in streams",
         }),
-        starred_message_counts: $t({defaultMessage: "Show counts for starred messages"}),
-        twenty_four_hour_time: $t({defaultMessage: "Time format"}),
-        translate_emoticons: new Handlebars.SafeString(
-            $t_html({
-                defaultMessage: "Convert emoticons before sending (<code>:)</code> becomes 😃)",
-            }),
-        ),
+        send_private_typing_notifications: $t({
+            defaultMessage: "Let recipients see when I'm typing private messages",
+        }),
+        send_read_receipts: $t({
+            defaultMessage: "Let participants see when I've read messages",
+        }),
+
+        ...settings_config.notification_settings_labels,
+        ...settings_config.display_settings_labels,
     };
 }
 
@@ -113,18 +87,20 @@ export function build_page() {
         color_scheme_values: settings_config.color_scheme_values,
         default_view_values: settings_config.default_view_values,
         twenty_four_hour_time_values: settings_config.twenty_four_hour_time_values,
-        general_settings: settings_config.all_notifications().general_settings,
-        notification_settings: settings_config.all_notifications().settings,
+        general_settings: settings_config.all_notifications(user_settings).general_settings,
+        notification_settings: settings_config.all_notifications(user_settings).settings,
+        email_notifications_batching_period_values:
+            settings_config.email_notifications_batching_period_values,
         desktop_icon_count_display_values: settings_config.desktop_icon_count_display_values,
         show_push_notifications_tooltip:
-            settings_config.all_notifications().show_push_notifications_tooltip,
+            settings_config.all_notifications(user_settings).show_push_notifications_tooltip,
         display_settings: settings_config.get_all_display_settings(),
         user_can_change_name: settings_data.user_can_change_name(),
         user_can_change_avatar: settings_data.user_can_change_avatar(),
         user_role_text: people.get_user_type(page_params.user_id),
-        default_language_name: settings_display.default_language_name,
+        default_language_name: settings_display.user_default_language_name,
         language_list_dbl_col: get_language_list_columns(user_settings.default_language),
-        user_settings,
+        settings_object: user_settings,
     });
 
     $(".settings-box").html(rendered_settings_tab);

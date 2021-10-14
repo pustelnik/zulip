@@ -14,7 +14,7 @@ problematic behavior:
 * Restrict who can [create streams](/help/configure-who-can-create-streams),
   [create bots](/help/restrict-bot-creation), [send private
   messages](/help/restrict-private-messages), or
-  [add custom emoji](/help/configure-who-can-add-custom-emoji).
+  [add custom emoji](/help/custom-emoji#change-who-can-add-custom-emoji).
 * Link to a code of conduct in your
   [organization description](/help/create-your-organization-profile)
   (displayed on the registration page).
@@ -51,7 +51,7 @@ organization's policy choices.
 * [Change users' names](/help/change-a-users-name) (e.g. to "Name (Spammer)")
   for users who sent spam private messages to many community members.
 * [Deactivate bots](/help/deactivate-or-reactivate-a-bot) or
-  [delete custom emoji](/help/add-custom-emoji#delete-custom-emoji).
+  [delete custom emoji](/help/custom-emoji#delete-custom-emoji).
 
 ## In the works
 

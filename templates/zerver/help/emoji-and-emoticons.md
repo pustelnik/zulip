@@ -58,7 +58,7 @@ Copying and pasting emoji from other sites generally works.
 ## Change your emoji set
 
 Your emoji set determines how you see emoji. It has no effect on the emoji
-you send.
+you send. The default is **Google modern**.
 
 {start_tabs}
 
@@ -71,6 +71,6 @@ you send.
 
 ## Related articles
 
-* [Add custom emoji](/help/add-custom-emoji)
+* [Add custom emoji](/help/custom-emoji)
 * [Emoji reactions](/help/emoji-reactions)
 * [View emoji as text](/help/view-emoji-as-text)

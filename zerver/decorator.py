@@ -40,7 +40,7 @@ from zerver.lib.exceptions import (
 )
 from zerver.lib.queue import queue_json_publish
 from zerver.lib.rate_limiter import RateLimitedIPAddr, RateLimitedUser
-from zerver.lib.request import REQ, get_request_notes, has_request_variables
+from zerver.lib.request import REQ, RequestNotes, has_request_variables
 from zerver.lib.response import json_method_not_allowed, json_success, json_unauthorized
 from zerver.lib.subdomains import get_subdomain, user_matches_subdomain
 from zerver.lib.timestamp import datetime_to_timestamp, timestamp_to_datetime
@@ -85,7 +85,7 @@ def update_user_activity(
     if request.META["PATH_INFO"] == "/json/users/me/presence":
         return
 
-    request_notes = get_request_notes(request)
+    request_notes = RequestNotes.get_notes(request)
     if query is not None:
         pass
     elif request_notes.query is not None:
@@ -115,7 +115,7 @@ def require_post(func: ViewFuncT) -> ViewFuncT:
                 request.path,
                 extra={"status_code": 405, "request": request},
             )
-            if get_request_notes(request).error_format == "JSON":
+            if RequestNotes.get_notes(request).error_format == "JSON":
                 return json_method_not_allowed(["POST"])
             else:
                 return TemplateResponse(
@@ -183,7 +183,7 @@ def process_client(
     skip_update_user_activity: bool = False,
     query: Optional[str] = None,
 ) -> None:
-    request_notes = get_request_notes(request)
+    request_notes = RequestNotes.get_notes(request)
     if client_name is None:
         client_name = request_notes.client_name
 
@@ -373,6 +373,28 @@ def webhook_view(
     return _wrapped_view_func
 
 
+def zulip_redirect_to_login(
+    request: HttpRequest,
+    login_url: Optional[str] = None,
+    redirect_field_name: str = REDIRECT_FIELD_NAME,
+) -> HttpResponseRedirect:
+    path = request.build_absolute_uri()
+    resolved_login_url = resolve_url(login_url or settings.LOGIN_URL)
+    # If the login URL is the same scheme and net location then just
+    # use the path as the "next" url.
+    login_scheme, login_netloc = urllib.parse.urlparse(resolved_login_url)[:2]
+    current_scheme, current_netloc = urllib.parse.urlparse(path)[:2]
+    if (not login_scheme or login_scheme == current_scheme) and (
+        not login_netloc or login_netloc == current_netloc
+    ):
+        path = request.get_full_path()
+
+    if path == "/":
+        # Don't add ?next=/, to keep our URLs clean
+        return HttpResponseRedirect(resolved_login_url)
+    return redirect_to_login(path, resolved_login_url, redirect_field_name)
+
+
 # From Django 2.2, modified to pass the request rather than just the
 # user into test_func; this is useful so that we can revalidate the
 # subdomain matches the user's realm.  It is likely that we could make
@@ -394,23 +416,7 @@ def user_passes_test(
         def _wrapped_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
             if test_func(request):
                 return view_func(request, *args, **kwargs)
-            path = request.build_absolute_uri()
-            resolved_login_url = resolve_url(login_url or settings.LOGIN_URL)
-            # If the login URL is the same scheme and net location then just
-            # use the path as the "next" url.
-            login_scheme, login_netloc = urllib.parse.urlparse(resolved_login_url)[:2]
-            current_scheme, current_netloc = urllib.parse.urlparse(path)[:2]
-            if (not login_scheme or login_scheme == current_scheme) and (
-                not login_netloc or login_netloc == current_netloc
-            ):
-                path = request.get_full_path()
-
-            # TODO: Restore testing for this case; it was removed when
-            # we enabled web-public stream testing on /.
-            if path == "/":  # nocoverage
-                # Don't add ?next=/, to keep our URLs clean
-                return HttpResponseRedirect(resolved_login_url)
-            return redirect_to_login(path, resolved_login_url, redirect_field_name)
+            return zulip_redirect_to_login(request, login_url, redirect_field_name)
 
         return cast(ViewFuncT, _wrapped_view)  # https://github.com/python/mypy/issues/1927
 
@@ -438,7 +444,7 @@ def do_login(request: HttpRequest, user_profile: UserProfile) -> None:
     and also adds helpful data needed by our server logs.
     """
     django_login(request, user_profile)
-    get_request_notes(request).requestor_for_logs = user_profile.format_requestor_for_logs()
+    RequestNotes.get_notes(request).requestor_for_logs = user_profile.format_requestor_for_logs()
     process_client(request, user_profile, is_browser_view=True)
     if settings.TWO_FACTOR_AUTHENTICATION_ENABLED:
         # Log in with two factor authentication as well.
@@ -448,7 +454,7 @@ def do_login(request: HttpRequest, user_profile: UserProfile) -> None:
 def log_view_func(view_func: ViewFuncT) -> ViewFuncT:
     @wraps(view_func)
     def _wrapped_view_func(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
-        get_request_notes(request).query = view_func.__name__
+        RequestNotes.get_notes(request).query = view_func.__name__
         return view_func(request, *args, **kwargs)
 
     return cast(ViewFuncT, _wrapped_view_func)  # https://github.com/python/mypy/issues/1927
@@ -808,7 +814,7 @@ def client_is_exempt_from_rate_limiting(request: HttpRequest) -> bool:
 
     # Don't rate limit requests from Django that come from our own servers,
     # and don't rate-limit dev instances
-    client = get_request_notes(request).client
+    client = RequestNotes.get_notes(request).client
     return (client is not None and client.name.lower() == "internal") and (
         is_local_addr(request.META["REMOTE_ADDR"]) or settings.DEBUG_RATE_LIMITING
     )
@@ -832,7 +838,7 @@ def internal_notify_view(
         ) -> HttpResponse:
             if not authenticate_notify(request):
                 raise AccessDeniedError()
-            request_notes = get_request_notes(request)
+            request_notes = RequestNotes.get_notes(request)
             is_tornado_request = request_notes.tornado_handler is not None
             # These next 2 are not security checks; they are internal
             # assertions to help us find bugs.

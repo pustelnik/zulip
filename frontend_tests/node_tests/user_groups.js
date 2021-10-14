@@ -10,9 +10,11 @@ const user_groups = zrequire("user_groups");
 
 run_test("user_groups", () => {
     const students = {
+        description: "Students group",
         name: "Students",
         id: 0,
-        members: [1, 2],
+        members: new Set([1, 2]),
+        is_system_group: false,
     };
 
     const params = {};
@@ -21,22 +23,24 @@ run_test("user_groups", () => {
     const user_id_part_of_a_group = 2;
 
     user_groups.initialize(params);
-    assert.equal(user_groups.get_user_group_from_id(students.id), students);
+    assert.deepEqual(user_groups.get_user_group_from_id(students.id), students);
 
     const admins = {
         name: "Admins",
         description: "foo",
         id: 1,
-        members: [3],
+        members: new Set([3]),
+        is_system_group: false,
     };
     const all = {
         name: "Everyone",
         id: 2,
-        members: [1, 2, 3],
+        members: new Set([1, 2, 3]),
+        is_system_group: false,
     };
 
     user_groups.add(admins);
-    assert.equal(user_groups.get_user_group_from_id(admins.id), admins);
+    assert.deepEqual(user_groups.get_user_group_from_id(admins.id), admins);
 
     const update_name_event = {
         group_id: admins.id,
@@ -56,13 +60,16 @@ run_test("user_groups", () => {
     user_groups.update(update_des_event);
     assert.equal(user_groups.get_user_group_from_id(admins.id).description, "administer");
 
-    blueslip.expect("error", "Unknown group_id in get_user_group_from_id: " + all.id);
-    assert.equal(user_groups.get_user_group_from_id(all.id), undefined);
-
+    assert.throws(() => user_groups.get_user_group_from_id(all.id), {
+        name: "Error",
+        message: "Unknown group_id in get_user_group_from_id: 2",
+    });
     user_groups.remove(students);
 
-    blueslip.expect("error", "Unknown group_id in get_user_group_from_id: " + students.id);
-    assert.equal(user_groups.get_user_group_from_id(students.id), undefined);
+    assert.throws(() => user_groups.get_user_group_from_id(students.id), {
+        name: "Error",
+        message: "Unknown group_id in get_user_group_from_id: 0",
+    });
 
     assert.equal(user_groups.get_user_group_from_name(all.name), undefined);
     assert.equal(user_groups.get_user_group_from_name(admins.name).id, 1);
@@ -101,4 +108,8 @@ run_test("user_groups", () => {
 
     blueslip.expect("error", "Could not find user group with ID -1");
     assert.equal(user_groups.is_member_of(-1, 15), false);
+
+    blueslip.expect("error", "Could not find user group with ID -9999", 2);
+    user_groups.add_members(-9999);
+    user_groups.remove_members(-9999);
 });

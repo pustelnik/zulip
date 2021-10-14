@@ -17,6 +17,7 @@ import * as narrow_state from "./narrow_state";
 import * as navigate from "./navigate";
 import {page_params} from "./page_params";
 import * as people from "./people";
+import {realm_user_settings_defaults} from "./realm_user_settings_defaults";
 import * as settings_config from "./settings_config";
 import * as spoilers from "./spoilers";
 import * as stream_data from "./stream_data";
@@ -89,13 +90,16 @@ export function initialize() {
             window_focused = false;
         });
 
-    update_notification_sound_source();
+    update_notification_sound_source($("#user-notification-sound-audio"), user_settings);
+    update_notification_sound_source(
+        $("#realm-default-notification-sound-audio"),
+        realm_user_settings_defaults,
+    );
 }
 
-function update_notification_sound_source() {
-    const notification_sound = user_settings.notification_sound;
+export function update_notification_sound_source(container_elem, settings_object) {
+    const notification_sound = settings_object.notification_sound;
     const audio_file_without_extension = "/static/audio/notification_sounds/" + notification_sound;
-    const container_elem = $("#user-notification-sound-audio");
     container_elem
         .find(".notification-sound-source-ogg")
         .attr("src", `${audio_file_without_extension}.ogg`);
@@ -739,6 +743,6 @@ export function handle_global_notification_updates(notification_name, setting) {
 
     if (notification_name === "notification_sound") {
         // Change the sound source with the new page `notification_sound`.
-        update_notification_sound_source();
+        update_notification_sound_source($("#user-notification-sound-audio"), user_settings);
     }
 }

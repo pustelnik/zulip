@@ -239,6 +239,9 @@ AUTH_LDAP_USER_ATTR_MAP = {
     ## who are disabled in LDAP/Active Directory (and reactivate users who are not).
     ## See docs for usage details and precise semantics.
     # "userAccountControl": "userAccountControl",
+    ## Alternatively, you can map "deactivated" to a boolean attribute
+    ## that is "TRUE" for deactivated users and "FALSE" otherwise.
+    # "deactivated": "nsAccountLock",
     ## Restrict access to organizations using an LDAP attribute.
     ## See https://zulip.readthedocs.io/en/latest/production/authentication-methods.html#restricting-ldap-user-access-to-specific-organizations
     # "org_membership": "department",
@@ -336,10 +339,6 @@ AUTH_LDAP_USER_ATTR_MAP = {
 ## organization.  The default recommendation, `auth`, is a reserved
 ## subdomain; if you're using this setting, the "Callback URL" should be e.g.:
 ##   https://auth.zulip.example.com/complete/github/
-##
-## If you end up using a subdomain other then the default
-## recommendation, you must also set the 'ROOT_SUBDOMAIN_ALIASES' list
-## to include this subdomain.
 #
 # SOCIAL_AUTH_SUBDOMAIN = 'auth'
 
@@ -448,11 +447,24 @@ SOCIAL_AUTH_SAML_ENABLED_IDPS: Dict[str, Any] = {
     },
 }
 
+# More complete documentation of the configurable security settings
+# are available in the "security" part of https://github.com/onelogin/python3-saml#settings.
 SOCIAL_AUTH_SAML_SECURITY_CONFIG: Dict[str, Any] = {
     ## If you've set up the optional private and public server keys,
     ## set this to True to enable signing of SAMLRequests using the
     ## private key.
     "authnRequestsSigned": False,
+    ## If you'd like the Zulip server to request that the IdP limit user identity
+    ## verification to a specific set of authentication contexts, you can do this
+    ## by changing the requestedAuthnContext parameter to a list of specific
+    ## Authentication Context Classes that you want to include in the AuthnContext. E.g.:
+    ##
+    # "requestedAuthnContext": ["urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+    #                           "urn:oasis:names:tc:SAML:2.0:ac:classes:X509"],
+    ##
+    ## For details on this, see the aforementioned python3-saml documentation
+    ## and https://docs.oasis-open.org/security/saml/v2.0/saml-authn-context-2.0-os.pdf
+    "requestedAuthnContext": False,
 }
 
 ## These SAML settings you likely won't need to modify.

@@ -443,7 +443,7 @@ export function toggle_actions_popover(element, id) {
             editability_menu_item = $t({defaultMessage: "Edit"});
         } else if (editability === message_edit.editability_types.TOPIC_ONLY) {
             use_edit_icon = false;
-            editability_menu_item = $t({defaultMessage: "View source / Edit topic"});
+            editability_menu_item = $t({defaultMessage: "View source / Move message"});
         } else {
             use_edit_icon = false;
             editability_menu_item = $t({defaultMessage: "View source"});
@@ -479,10 +479,9 @@ export function toggle_actions_popover(element, id) {
             !message.locally_echoed && !message.is_me_message && message.collapsed;
 
         const should_display_edit_and_view_source =
-            (message.content !== "<p>(deleted)</p>" ||
-                editability === message_edit.editability_types.FULL ||
-                editability === message_edit.editability_types.TOPIC_ONLY) &&
-            not_spectator;
+            message.content !== "<p>(deleted)</p>" ||
+            editability === message_edit.editability_types.FULL ||
+            editability === message_edit.editability_types.TOPIC_ONLY;
         const should_display_quote_and_reply =
             message.content !== "<p>(deleted)</p>" && not_spectator;
 
@@ -842,12 +841,12 @@ export function register_click_handlers() {
         const row = $(this).closest(".message_row");
         e.stopPropagation();
         const message = message_lists.current.get(rows.id(row));
-        const group = user_groups.get_user_group_from_id(user_group_id, true);
-        if (group === undefined) {
+        try {
+            const group = user_groups.get_user_group_from_id(user_group_id);
+            show_user_group_info_popover(this, group, message);
+        } catch {
             // This user group has likely been deleted.
             blueslip.info("Unable to find user group in message" + message.sender_id);
-        } else {
-            show_user_group_info_popover(this, group, message);
         }
     });
 

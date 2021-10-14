@@ -31,7 +31,7 @@ from zerver.lib.url_encoding import (
     stream_narrow_url,
     topic_narrow_url,
 )
-from zerver.lib.user_groups import access_user_group_by_id, get_user_group_members
+from zerver.lib.user_groups import access_user_group_by_id, get_user_group_direct_members
 from zerver.models import (
     Message,
     Recipient,
@@ -61,26 +61,30 @@ def relative_to_full_url(fragment: lxml.html.HtmlElement, base_url: str) -> None
             if elem.get("title") is not None:
                 elem.set("title", link)
 
-    # Inline images can't be displayed in the emails as the request
-    # from the mail server can't be authenticated because it has no
-    # user_profile object linked to it. So we scrub the inline image
-    # container.
-    inline_image_containers = fragment.find_class("message_inline_image")
-    for container in inline_image_containers:
-        container.drop_tree()
-
-    # The previous block handles most inline images, but for messages
-    # where the entire Markdown input was just the URL of an image
-    # (i.e. the entire body is a message_inline_image object), the
-    # entire message body will be that image element; here, we need a
-    # more drastic edit to the content.
-    if fragment.get("class") == "message_inline_image":
-        image_link = fragment.find("a").get("href")
-        image_title = fragment.find("a").get("title")
+    # Because we were parsed with fragment_fromstring, we are
+    # guaranteed there is a top-level <div>, and the original
+    # top-level contents are within that.
+    if len(fragment) == 1 and fragment[0].get("class") == "message_inline_image":
+        # The next block handles most inline images, but for messages
+        # where the entire Markdown input was just the URL of an image
+        # (i.e. the entire body is a message_inline_image object), the
+        # entire message body will be that image element; here, we need a
+        # more drastic edit to the content.
+        inner = fragment[0]
+        image_link = inner.find("a").get("href")
+        image_title = inner.find("a").get("title")
         title_attr = {} if image_title is None else {"title": image_title}
-        fragment.clear()
-        fragment.tag = "p"
-        fragment.append(E.A(image_link, href=image_link, target="_blank", **title_attr))
+        inner.clear()
+        inner.tag = "p"
+        inner.append(E.A(image_link, href=image_link, target="_blank", **title_attr))
+    else:
+        # Inline images can't be displayed in the emails as the request
+        # from the mail server can't be authenticated because it has no
+        # user_profile object linked to it. So we scrub the inline image
+        # container.
+        inline_image_containers = fragment.find_class("message_inline_image")
+        for container in inline_image_containers:
+            container.drop_tree()
 
     fragment.make_links_absolute(base_url)
 
@@ -364,7 +368,7 @@ def get_mentioned_user_group_name(
     smallest_user_group_name = None
     for user_group_id in mentioned_user_group_ids:
         current_user_group = access_user_group_by_id(user_group_id, user_profile, for_mention=True)
-        current_user_group_size = len(get_user_group_members(current_user_group))
+        current_user_group_size = len(get_user_group_direct_members(current_user_group))
 
         if current_user_group_size < smallest_user_group_size:
             # If multiple user groups are mentioned, we prefer the
@@ -569,6 +573,10 @@ def handle_missedmessage_emails(
         # Never email bot users.
         return
 
+    if not user_profile.enable_offline_email_notifications:
+        # BUG: Investigate why it's possible to get here.
+        return  # nocoverage
+
     # Note: This query structure automatically filters out any
     # messages that were permanently deleted, since those would now be
     # in the ArchivedMessage table, not the Message table.
@@ -678,6 +686,7 @@ def enqueue_welcome_emails(user: UserProfile, realm_creation: bool = False) -> N
         realm_creation=realm_creation,
         email=user.delivery_email,
         is_realm_admin=user.is_realm_admin,
+        is_demo_org=user.realm.demo_organization_scheduled_deletion_date is not None,
     )
     if user.is_realm_admin:
         context["getting_started_link"] = (

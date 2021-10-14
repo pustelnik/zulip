@@ -20,6 +20,7 @@ import * as narrow from "./narrow";
 import * as overlays from "./overlays";
 import * as people from "./people";
 import * as stream_data from "./stream_data";
+import * as sub_store from "./sub_store";
 import * as timerender from "./timerender";
 import * as util from "./util";
 
@@ -107,6 +108,10 @@ export function snapshot_message() {
         message.private_message_recipient = recipient;
     } else {
         message.stream = compose_state.stream_name();
+        const sub = stream_data.get_sub(message.stream);
+        if (sub) {
+            message.stream_id = sub.stream_id;
+        }
         message.topic = compose_state.topic();
     }
     return message;
@@ -151,7 +156,8 @@ function draft_notify() {
     setTimeout(remove_instance, 1500);
 }
 
-export function update_draft() {
+export function update_draft(opts = {}) {
+    const no_notify = opts.no_notify || false;
     const draft = snapshot_message();
 
     if (draft === undefined) {
@@ -160,7 +166,7 @@ export function update_draft() {
         // the existing draft yet--the user may have mistakenly
         // hit delete after select-all or something.
         // Just do nothing.
-        return;
+        return undefined;
     }
 
     const draft_id = $("#compose-textarea").data("draft-id");
@@ -169,23 +175,21 @@ export function update_draft() {
         // We don't save multiple drafts of the same message;
         // just update the existing draft.
         draft_model.editDraft(draft_id, draft);
-        draft_notify();
-        return;
+        if (!no_notify) {
+            draft_notify();
+        }
+        return draft_id;
     }
 
     // We have never saved a draft for this message, so add
     // one.
     const new_draft_id = draft_model.addDraft(draft);
     $("#compose-textarea").data("draft-id", new_draft_id);
-    draft_notify();
-}
-
-export function delete_active_draft() {
-    const draft_id = $("#compose-textarea").data("draft-id");
-    if (draft_id) {
-        draft_model.deleteDraft(draft_id);
+    if (!no_notify) {
+        draft_notify();
     }
-    $("#compose-textarea").removeData("draft-id");
+
+    return new_draft_id;
 }
 
 export function restore_draft(draft_id) {
@@ -247,9 +251,17 @@ export function format_draft(draft) {
         // In case there is no stream for the draft, we need a
         // single space char for proper rendering of the stream label
         const space_string = new Handlebars.SafeString("&nbsp;");
-        const stream = draft.stream.length > 0 ? draft.stream : space_string;
+        let stream_name = draft.stream.length > 0 ? draft.stream : space_string;
+        if (draft.stream_id) {
+            const sub = sub_store.get(draft.stream_id);
+            if (sub && sub.name !== stream_name) {
+                stream_name = sub.name;
+                draft.stream = stream_name;
+                draft_model.editDraft(id, draft);
+            }
+        }
         let draft_topic = util.get_draft_topic(draft);
-        const draft_stream_color = stream_data.get_color(draft.stream);
+        const draft_stream_color = stream_data.get_color(stream_name);
 
         if (draft_topic === "") {
             draft_topic = compose.empty_topic_placeholder();
@@ -258,7 +270,7 @@ export function format_draft(draft) {
         formatted = {
             draft_id: draft.id,
             is_stream: true,
-            stream,
+            stream_name,
             stream_color: draft_stream_color,
             dark_background: color_class.get_css_class(draft_stream_color),
             topic: draft_topic,

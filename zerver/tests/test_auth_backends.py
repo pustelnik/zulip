@@ -168,7 +168,10 @@ class AuthBackendTest(ZulipTestCase):
         if isinstance(backend, SocialAuthMixin):
             # Returns a redirect to login page with an error.
             self.assertEqual(result.status_code, 302)
-            self.assertEqual(result.url, user_profile.realm.uri + "/login/?is_deactivated=true")
+            self.assertEqual(
+                result.url,
+                f"{user_profile.realm.uri}/login/?is_deactivated={user_profile.delivery_email}",
+            )
         else:
             # Just takes you back to the login page treating as
             # invalid auth; this is correct because the form will
@@ -544,6 +547,11 @@ class AuthBackendTest(ZulipTestCase):
 
             backend.strategy.request_data = return_email
 
+            if request is None:
+                request = mock.MagicMock()
+                request.META = dict(REMOTE_ADDR="127.0.0.1")
+            backend.strategy.request = request
+
             result = orig_authenticate(backend, request, **kwargs)
             return result
 
@@ -591,7 +599,12 @@ class AuthBackendTest(ZulipTestCase):
                     self.verify_backend(backend, good_kwargs=good_kwargs, bad_kwargs=bad_kwargs)
                 # Verify logging for deactivated users
                 self.assertEqual(
-                    info_log.output,
+                    # Filter out noisy logs:
+                    [
+                        output
+                        for output in info_log.output
+                        if "Authentication attempt from 127.0.0.1" not in output
+                    ],
                     [
                         f"INFO:{logger_name}:Failed login attempt for deactivated account: {user.id}@{user.realm.string_id}",
                         f"INFO:{logger_name}:Failed login attempt for deactivated account: {user.id}@{user.realm.string_id}",
@@ -1051,12 +1064,13 @@ class SocialAuthBase(DesktopFlowTestingLib, ZulipTestCase):
 
     def test_social_auth_success(self) -> None:
         account_data_dict = self.get_account_data_dict(email=self.email, name=self.name)
-        result = self.social_auth_test(
-            account_data_dict,
-            expect_choose_email_screen=False,
-            subdomain="zulip",
-            next="/user_uploads/image",
-        )
+        with self.assertLogs(self.logger_string, level="INFO") as m:
+            result = self.social_auth_test(
+                account_data_dict,
+                expect_choose_email_screen=False,
+                subdomain="zulip",
+                next="/user_uploads/image",
+            )
         data = load_subdomain_token(result)
         self.assertEqual(data["email"], self.example_email("hamlet"))
         self.assertEqual(data["full_name"], self.name)
@@ -1066,6 +1080,11 @@ class SocialAuthBase(DesktopFlowTestingLib, ZulipTestCase):
         parsed_url = urllib.parse.urlparse(result.url)
         uri = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
         self.assertTrue(uri.startswith("http://zulip.testserver/accounts/login/subdomain/"))
+
+        self.assertIn(
+            f"INFO:{self.logger_string}:Authentication attempt from 127.0.0.1: subdomain=zulip;username=hamlet@zulip.com;outcome=success",
+            m.output[0],
+        )
 
     @override_settings(SOCIAL_AUTH_SUBDOMAIN=None)
     def test_when_social_auth_subdomain_is_not_set(self) -> None:
@@ -1098,7 +1117,10 @@ class SocialAuthBase(DesktopFlowTestingLib, ZulipTestCase):
                 account_data_dict, expect_choose_email_screen=True, subdomain="zulip"
             )
             self.assertEqual(result.status_code, 302)
-            self.assertEqual(result.url, user_profile.realm.uri + "/login/?is_deactivated=true")
+            self.assertEqual(
+                result.url,
+                f"{user_profile.realm.uri}/login/?is_deactivated={user_profile.delivery_email}",
+            )
         self.assertEqual(
             m.output,
             [
@@ -1107,7 +1129,11 @@ class SocialAuthBase(DesktopFlowTestingLib, ZulipTestCase):
                 )
             ],
         )
-        # TODO: verify whether we provide a clear error message
+
+        result = self.client_get(result.url)
+        self.assert_in_success_response(
+            [f"Your account {user_profile.delivery_email} has been deactivated."], result
+        )
 
     def test_social_auth_invalid_realm(self) -> None:
         account_data_dict = self.get_account_data_dict(email=self.email, name=self.name)
@@ -1460,7 +1486,7 @@ class SocialAuthBase(DesktopFlowTestingLib, ZulipTestCase):
         realm = get_realm("zulip")
 
         iago = self.example_user("iago")
-        do_invite_users(iago, [email], [])
+        do_invite_users(iago, [email], [], invite_expires_in_days=2)
 
         account_data_dict = self.get_account_data_dict(email=email, name=name)
         result = self.social_auth_test(
@@ -1510,7 +1536,10 @@ class SocialAuthBase(DesktopFlowTestingLib, ZulipTestCase):
         referrer = self.example_user("hamlet")
         multiuse_obj = MultiuseInvite.objects.create(realm=realm, referred_by=referrer)
         multiuse_obj.streams.set(streams)
-        create_confirmation_link(multiuse_obj, Confirmation.MULTIUSE_INVITE)
+        validity_in_days = 2
+        create_confirmation_link(
+            multiuse_obj, Confirmation.MULTIUSE_INVITE, validity_in_days=validity_in_days
+        )
         multiuse_confirmation = Confirmation.objects.all().last()
         assert multiuse_confirmation is not None
         multiuse_object_key = multiuse_confirmation.confirmation_key
@@ -1750,11 +1779,15 @@ class SocialAuthBase(DesktopFlowTestingLib, ZulipTestCase):
         email = self.nonreg_email("alice")
         name = "Alice Jones"
 
-        do_invite_users(iago, [email], [], invite_as=PreregistrationUser.INVITE_AS["REALM_ADMIN"])
-        expired_date = timezone_now() - datetime.timedelta(
-            days=settings.INVITATION_LINK_VALIDITY_DAYS + 1
+        invite_expires_in_days = 2
+        do_invite_users(
+            iago,
+            [email],
+            [],
+            invite_expires_in_days=invite_expires_in_days,
+            invite_as=PreregistrationUser.INVITE_AS["REALM_ADMIN"],
         )
-        PreregistrationUser.objects.filter(email=email).update(invited_at=expired_date)
+        now = timezone_now() + datetime.timedelta(days=invite_expires_in_days + 1)
 
         subdomain = "zulip"
         realm = get_realm("zulip")
@@ -1762,9 +1795,10 @@ class SocialAuthBase(DesktopFlowTestingLib, ZulipTestCase):
         result = self.social_auth_test(
             account_data_dict, expect_choose_email_screen=True, subdomain=subdomain, is_signup=True
         )
-        self.stage_two_of_registration(
-            result, realm, subdomain, email, name, name, self.BACKEND_CLASS.full_name_validated
-        )
+        with mock.patch("zerver.models.timezone_now", return_value=now):
+            self.stage_two_of_registration(
+                result, realm, subdomain, email, name, name, self.BACKEND_CLASS.full_name_validated
+            )
 
         # The invitation is expired, so the user should be created as normal member only.
         created_user = get_user_by_delivery_email(email, realm)
@@ -4036,7 +4070,10 @@ class GoogleAuthBackendTest(SocialAuthBase):
         referrer = self.example_user("hamlet")
         multiuse_obj = MultiuseInvite.objects.create(realm=realm, referred_by=referrer)
         multiuse_obj.streams.set(streams)
-        create_confirmation_link(multiuse_obj, Confirmation.MULTIUSE_INVITE)
+        validity_in_days = 2
+        create_confirmation_link(
+            multiuse_obj, Confirmation.MULTIUSE_INVITE, validity_in_days=validity_in_days
+        )
         multiuse_confirmation = Confirmation.objects.all().last()
         assert multiuse_confirmation is not None
         multiuse_object_key = multiuse_confirmation.confirmation_key
@@ -4673,6 +4710,12 @@ class TestDevAuthBackend(ZulipTestCase):
         result = self.client_post("/accounts/login/local/", data)
         self.assertEqual(result.status_code, 302)
         self.assert_logged_in_user_id(user_profile.id)
+
+    def test_spectator(self) -> None:
+        data = {"prefers_web_public_view": "Anonymous login"}
+        result = self.client_post("/accounts/login/local/", data)
+        self.assertEqual(result.status_code, 302)
+        self.assertEqual(result.url, "http://zulip.testserver/")
 
     def test_login_success_with_2fa(self) -> None:
         user_profile = self.example_user("hamlet")
@@ -5840,7 +5883,7 @@ class TestZulipLDAPUserPopulator(ZulipLDAPTestCase):
             ["WARNING:django_auth_ldap:Name too short! while authenticating hamlet"],
         )
 
-    def test_deactivate_user(self) -> None:
+    def test_deactivate_user_with_useraccountcontrol_attr(self) -> None:
         self.change_ldap_user_attr("hamlet", "userAccountControl", "2")
 
         with self.settings(
@@ -5853,6 +5896,50 @@ class TestZulipLDAPUserPopulator(ZulipLDAPTestCase):
             info_logs.output,
             [
                 "INFO:zulip.ldap:Deactivating user hamlet@zulip.com because they are disabled in LDAP."
+            ],
+        )
+
+    def test_deactivate_reactivate_user_with_deactivated_attr(self) -> None:
+        self.change_ldap_user_attr("hamlet", "someCustomAttr", "TRUE")
+
+        with self.settings(
+            AUTH_LDAP_USER_ATTR_MAP={"full_name": "cn", "deactivated": "someCustomAttr"}
+        ), self.assertLogs("zulip.ldap") as info_logs:
+            self.perform_ldap_sync(self.example_user("hamlet"))
+        hamlet = self.example_user("hamlet")
+        self.assertFalse(hamlet.is_active)
+        self.assertEqual(
+            info_logs.output,
+            [
+                "INFO:zulip.ldap:Deactivating user hamlet@zulip.com because they are disabled in LDAP."
+            ],
+        )
+
+        self.change_ldap_user_attr("hamlet", "someCustomAttr", "FALSE")
+        with self.settings(
+            AUTH_LDAP_USER_ATTR_MAP={"full_name": "cn", "deactivated": "someCustomAttr"}
+        ), self.assertLogs("zulip.ldap") as info_logs:
+            self.perform_ldap_sync(self.example_user("hamlet"))
+        hamlet.refresh_from_db()
+        self.assertTrue(hamlet.is_active)
+        self.assertEqual(
+            info_logs.output,
+            [
+                "INFO:zulip.ldap:Reactivating user hamlet@zulip.com because they are not disabled in LDAP."
+            ],
+        )
+
+        self.change_ldap_user_attr("hamlet", "someCustomAttr", "YESSS")
+        with self.settings(
+            AUTH_LDAP_USER_ATTR_MAP={"full_name": "cn", "deactivated": "someCustomAttr"}
+        ), self.assertLogs("django_auth_ldap") as ldap_logs, self.assertRaises(AssertionError):
+            self.perform_ldap_sync(self.example_user("hamlet"))
+        hamlet.refresh_from_db()
+        self.assertTrue(hamlet.is_active)
+        self.assertEqual(
+            ldap_logs.output,
+            [
+                "WARNING:django_auth_ldap:Invalid value 'YESSS' in the LDAP attribute mapped to deactivated while authenticating hamlet"
             ],
         )
 
@@ -6292,12 +6379,13 @@ class TestMaybeSendToRegistration(ZulipTestCase):
         email = self.example_email("hamlet")
         user = PreregistrationUser(email=email)
         user.save()
+        create_confirmation_link(user, Confirmation.USER_REGISTRATION)
 
         with mock.patch("zerver.views.auth.HomepageForm", return_value=Form()):
             self.assertEqual(PreregistrationUser.objects.all().count(), 1)
             result = maybe_send_to_registration(request, email, is_signup=True)
             self.assertEqual(result.status_code, 302)
-            confirmation = Confirmation.objects.all().first()
+            confirmation = Confirmation.objects.all().last()
             assert confirmation is not None
             confirmation_key = confirmation.confirmation_key
             self.assertIn("do_confirm/" + confirmation_key, result.url)

@@ -38,6 +38,7 @@ import markdown.inlinepatterns
 import markdown.postprocessors
 import markdown.treeprocessors
 import markdown.util
+import re2
 import requests
 from django.conf import settings
 from markdown.blockparser import BlockParser
@@ -53,6 +54,7 @@ from zerver.lib.exceptions import MarkdownRenderingException
 from zerver.lib.markdown import fenced_code
 from zerver.lib.markdown.fenced_code import FENCE_RE
 from zerver.lib.mention import MentionData, get_stream_name_info
+from zerver.lib.outgoing_http import OutgoingSession
 from zerver.lib.subdomains import is_static_or_current_realm_url
 from zerver.lib.tex import render_tex
 from zerver.lib.thumbnail import user_uploads_or_external
@@ -64,6 +66,34 @@ from zerver.lib.url_preview import preview as link_preview
 from zerver.models import Message, Realm, linkifiers_for_realm
 
 ReturnT = TypeVar("ReturnT")
+
+
+# Taken from
+# https://html.spec.whatwg.org/multipage/system-state.html#safelisted-scheme
+html_safelisted_schemes = (
+    "bitcoin",
+    "geo",
+    "im",
+    "irc",
+    "ircs",
+    "magnet",
+    "mailto",
+    "matrix",
+    "mms",
+    "news",
+    "nntp",
+    "openpgp4fpr",
+    "sip",
+    "sms",
+    "smsto",
+    "ssh",
+    "tel",
+    "urn",
+    "webcal",
+    "wtai",
+    "xmpp",
+)
+allowed_schemes = ("http", "https", "ftp", "file") + html_safelisted_schemes
 
 
 def one_time(method: Callable[[], ReturnT]) -> Callable[[], ReturnT]:
@@ -468,12 +498,17 @@ def fetch_tweet_data(tweet_id: str) -> Optional[Dict[str, Any]]:
     return res
 
 
+class OpenGraphSession(OutgoingSession):
+    def __init__(self) -> None:
+        super().__init__(role="markdown", timeout=1)
+
+
 def fetch_open_graph_image(url: str) -> Optional[Dict[str, Any]]:
     og = {"image": None, "title": None, "desc": None}
 
     try:
-        with requests.get(
-            url, headers={"Accept": "text/html,application/xhtml+xml"}, stream=True, timeout=1
+        with OpenGraphSession().get(
+            url, headers={"Accept": "text/html,application/xhtml+xml"}, stream=True
         ) as res:
             if res.status_code != requests.codes.ok:
                 return None
@@ -561,7 +596,7 @@ class BacktickInlineProcessor(markdown.inlinepatterns.BacktickInlineProcessor):
         # Let upstream's implementation do its job as it is, we'll
         # just replace the text to not strip the group because it
         # makes it impossible to put leading/trailing whitespace in
-        # an inline code block.
+        # an inline code span.
         el, start, end = ret = super().handleMatch(m, data)
         if el is not None and m.group(3):
             # upstream's code here is: m.group(3).strip() rather than m.group(3).
@@ -708,8 +743,8 @@ class InlineInterestingLinkProcessor(markdown.treeprocessors.Treeprocessor):
         # See https://github.com/zulip/zulip/issues/4658 for more information
         parsed_url = urllib.parse.urlparse(url)
         if parsed_url.netloc == "github.com" or parsed_url.netloc.endswith(".github.com"):
-            # https://github.com/zulip/zulip/blob/master/static/images/logo/zulip-icon-128x128.png ->
-            # https://raw.githubusercontent.com/zulip/zulip/master/static/images/logo/zulip-icon-128x128.png
+            # https://github.com/zulip/zulip/blob/main/static/images/logo/zulip-icon-128x128.png ->
+            # https://raw.githubusercontent.com/zulip/zulip/main/static/images/logo/zulip-icon-128x128.png
             split_path = parsed_url.path.split("/")
             if len(split_path) > 3 and split_path[3] == "blob":
                 return urllib.parse.urljoin(
@@ -1531,17 +1566,11 @@ def sanitize_url(url: str) -> Optional[str]:
     if not scheme:
         return sanitize_url("http://" + url)
 
-    locless_schemes = ["mailto", "news", "file", "bitcoin", "sms", "tel"]
-    if netloc == "" and scheme not in locless_schemes:
-        # This fails regardless of anything else.
-        # Return immediately to save additional processing
-        return None
-
     # Upstream code will accept a URL like javascript://foo because it
     # appears to have a netloc.  Additionally there are plenty of other
     # schemes that do weird things like launch external programs.  To be
-    # on the safe side, we whitelist the scheme.
-    if scheme not in ("http", "https", "ftp", "mailto", "file", "bitcoin", "sms", "tel"):
+    # on the safe side, we allow a fixed set of schemes.
+    if scheme not in allowed_schemes:
         return None
 
     # Upstream code scans path, parameters, and query for colon characters
@@ -1741,7 +1770,9 @@ class MarkdownListPreprocessor(markdown.preprocessors.Preprocessor):
 # Name for the outer capture group we use to separate whitespace and
 # other delimiters from the actual content.  This value won't be an
 # option in user-entered capture groups.
+BEFORE_CAPTURE_GROUP = "linkifier_before_match"
 OUTER_CAPTURE_GROUP = "linkifier_actual_match"
+AFTER_CAPTURE_GROUP = "linkifier_after_match"
 
 
 def prepare_linkifier_pattern(source: str) -> str:
@@ -1749,30 +1780,44 @@ def prepare_linkifier_pattern(source: str) -> str:
     whitespace, or opening delimiters, won't match if there are word
     characters directly after, and saves what was matched as
     OUTER_CAPTURE_GROUP."""
-    return fr"""(?<![^\s'"\(,:<])(?P<{OUTER_CAPTURE_GROUP}>{source})(?!\w)"""
+    return fr"""(?P<{BEFORE_CAPTURE_GROUP}>^|\s|['"\(,:<])(?P<{OUTER_CAPTURE_GROUP}>{source})(?P<{AFTER_CAPTURE_GROUP}>$|[^\pL\pN])"""
 
 
 # Given a regular expression pattern, linkifies groups that match it
 # using the provided format string to construct the URL.
-class LinkifierPattern(markdown.inlinepatterns.Pattern):
+class LinkifierPattern(CompiledInlineProcessor):
     """Applied a given linkifier to the input"""
 
     def __init__(
         self,
         source_pattern: str,
         format_string: str,
-        md: Optional[markdown.Markdown] = None,
+        md: markdown.Markdown,
     ) -> None:
-        self.pattern = prepare_linkifier_pattern(source_pattern)
-        self.format_string = format_string
-        super().__init__(self.pattern, md)
+        # Do not write errors to stderr (this still raises exceptions)
+        options = re2.Options()
+        options.log_errors = False
 
-    def handleMatch(self, m: Match[str]) -> Union[Element, str]:
+        compiled_re2 = re2.compile(prepare_linkifier_pattern(source_pattern), options=options)
+        self.format_string = format_string
+        super().__init__(compiled_re2, md)
+
+    def handleMatch(  # type: ignore[override] # supertype incompatible with supersupertype
+        self, m: Match[str], data: str
+    ) -> Union[Tuple[Element, int, int], Tuple[None, None, None]]:
         db_data = self.md.zulip_db_data
-        return url_to_a(
+        url = url_to_a(
             db_data,
             self.format_string % m.groupdict(),
             markdown.util.AtomicString(m.group(OUTER_CAPTURE_GROUP)),
+        )
+        if isinstance(url, str):
+            return None, None, None
+
+        return (
+            url,
+            m.start(2),
+            m.end(2),
         )
 
 
@@ -2286,11 +2331,19 @@ def topic_links(linkifiers_key: int, topic_name: str) -> List[Dict[str, str]]:
     matches: List[Dict[str, Union[str, int]]] = []
     linkifiers = linkifiers_for_realm(linkifiers_key)
 
+    options = re2.Options()
+    options.log_errors = False
     for linkifier in linkifiers:
         raw_pattern = linkifier["pattern"]
         url_format_string = linkifier["url_format"]
-        pattern = prepare_linkifier_pattern(raw_pattern)
-        for m in re.finditer(pattern, topic_name):
+        try:
+            pattern = re2.compile(prepare_linkifier_pattern(raw_pattern), options=options)
+        except re2.error:
+            # An invalid regex shouldn't be possible here, and logging
+            # here on an invalid regex would spam the logs with every
+            # message sent; simply move on.
+            continue
+        for m in pattern.finditer(topic_name):
             match_details = m.groupdict()
             match_text = match_details[OUTER_CAPTURE_GROUP]
             # We format the linkifier's url string using the matched text.

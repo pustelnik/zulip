@@ -1,4 +1,3 @@
-import ast
 import datetime
 import re
 import secrets
@@ -20,10 +19,13 @@ from typing import (
 )
 
 import django.contrib.auth
+import orjson
+import re2
 from bitfield import BitField
 from bitfield.types import BitHandler
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, UserManager
+from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.core.validators import MinLengthValidator, RegexValidator, URLValidator, validate_email
 from django.db import models, transaction
@@ -34,6 +36,7 @@ from django.utils.functional import Promise
 from django.utils.timezone import now as timezone_now
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy
+from django_cte import CTEManager
 
 from confirmation import settings as confirmation_settings
 from zerver.lib import cache
@@ -75,6 +78,7 @@ from zerver.lib.types import (
     LinkifierDict,
     ProfileData,
     ProfileDataElementBase,
+    ProfileDataElementValue,
     RealmUserValidator,
     UserFieldElement,
     Validator,
@@ -224,7 +228,7 @@ class Realm(models.Model):
     id: int = models.AutoField(auto_created=True, primary_key=True, verbose_name="ID")
 
     # User-visible display name and description used on e.g. the organization homepage
-    name: Optional[str] = models.CharField(max_length=MAX_REALM_NAME_LENGTH, null=True)
+    name: str = models.CharField(max_length=MAX_REALM_NAME_LENGTH)
     description: str = models.TextField(default="")
 
     # A short, identifier-like name for the organization.  Used in subdomains;
@@ -233,7 +237,7 @@ class Realm(models.Model):
     string_id: str = models.CharField(max_length=MAX_REALM_SUBDOMAIN_LENGTH, unique=True)
 
     date_created: datetime.datetime = models.DateTimeField(default=timezone_now)
-    demo_organization_scheduled_deletion_date: datetime.datetime = models.DateTimeField(
+    demo_organization_scheduled_deletion_date: Optional[datetime.datetime] = models.DateTimeField(
         default=None, null=True
     )
     deactivated: bool = models.BooleanField(default=False)
@@ -277,6 +281,7 @@ class Realm(models.Model):
     POLICY_MODERATORS_ONLY = 4
     POLICY_EVERYONE = 5
     POLICY_NOBODY = 6
+    POLICY_OWNERS_ONLY = 7
 
     COMMON_POLICY_TYPES = [
         POLICY_MEMBERS_ONLY,
@@ -301,13 +306,32 @@ class Realm(models.Model):
         POLICY_NOBODY,
     ]
 
+    # We don't allow granting roles less than Moderator access to
+    # create web-public streams, since it's a sensitive feature that
+    # can be used to send spam.
+    CREATE_WEB_PUBLIC_STREAM_POLICY_TYPES = [
+        POLICY_ADMINS_ONLY,
+        POLICY_MODERATORS_ONLY,
+        POLICY_OWNERS_ONLY,
+        POLICY_NOBODY,
+    ]
+
     DEFAULT_COMMUNITY_TOPIC_EDITING_LIMIT_SECONDS = 259200
 
     # Who in the organization is allowed to add custom emojis.
     add_custom_emoji_policy: int = models.PositiveSmallIntegerField(default=POLICY_MEMBERS_ONLY)
 
     # Who in the organization is allowed to create streams.
-    create_stream_policy: int = models.PositiveSmallIntegerField(default=POLICY_MEMBERS_ONLY)
+    create_public_stream_policy: int = models.PositiveSmallIntegerField(default=POLICY_MEMBERS_ONLY)
+    create_private_stream_policy: int = models.PositiveSmallIntegerField(
+        default=POLICY_MEMBERS_ONLY
+    )
+    create_web_public_stream_policy: int = models.PositiveSmallIntegerField(
+        default=POLICY_OWNERS_ONLY
+    )
+
+    # Who in the organization is allowed to delete messages they themselves sent.
+    delete_own_message_policy: bool = models.PositiveSmallIntegerField(default=POLICY_ADMINS_ONLY)
 
     # Who in the organization is allowed to edit topics of any message.
     edit_topic_policy: int = models.PositiveSmallIntegerField(default=POLICY_EVERYONE)
@@ -382,12 +406,14 @@ class Realm(models.Model):
     # some other actions.
     waiting_period_threshold: int = models.PositiveIntegerField(default=0)
 
-    allow_message_deleting: bool = models.BooleanField(default=False)
     DEFAULT_MESSAGE_CONTENT_DELETE_LIMIT_SECONDS = (
         600  # if changed, also change in admin.js, setting_org.js
     )
-    message_content_delete_limit_seconds: int = models.IntegerField(
-        default=DEFAULT_MESSAGE_CONTENT_DELETE_LIMIT_SECONDS,
+    MESSAGE_CONTENT_DELETE_LIMIT_SPECIAL_VALUES_MAP = {
+        "unlimited": None,
+    }
+    message_content_delete_limit_seconds: int = models.PositiveIntegerField(
+        default=DEFAULT_MESSAGE_CONTENT_DELETE_LIMIT_SECONDS, null=True
     )
 
     allow_message_editing: bool = models.BooleanField(default=True)
@@ -402,7 +428,6 @@ class Realm(models.Model):
     allow_edit_history: bool = models.BooleanField(default=True)
 
     # Defaults for new users
-    default_twenty_four_hour_time: bool = models.BooleanField(default=False)
     default_language: str = models.CharField(default="en", max_length=MAX_LANGUAGE_ID_LENGTH)
 
     DEFAULT_NOTIFICATION_STREAM_NAME = "general"
@@ -615,13 +640,13 @@ class Realm(models.Model):
     property_types: Dict[str, Union[type, Tuple[type, ...]]] = dict(
         add_custom_emoji_policy=int,
         allow_edit_history=bool,
-        allow_message_deleting=bool,
         bot_creation_policy=int,
-        create_stream_policy=int,
+        create_public_stream_policy=int,
+        create_private_stream_policy=int,
+        create_web_public_stream_policy=int,
         invite_to_stream_policy=int,
         move_messages_between_streams_policy=int,
         default_language=str,
-        default_twenty_four_hour_time=bool,
         description=str,
         digest_emails_enabled=bool,
         disallow_disposable_email_addresses=bool,
@@ -646,8 +671,9 @@ class Realm(models.Model):
         private_message_policy=int,
         user_group_edit_policy=int,
         default_code_block_language=(str, type(None)),
-        message_content_delete_limit_seconds=int,
+        message_content_delete_limit_seconds=(int, type(None)),
         wildcard_mention_policy=int,
+        delete_own_message_policy=int,
     )
 
     DIGEST_WEEKDAY_VALUES = [0, 1, 2, 3, 4, 5, 6]
@@ -868,6 +894,33 @@ class Realm(models.Model):
     def presence_disabled(self) -> bool:
         return self.is_zephyr_mirror_realm
 
+    def web_public_streams_enabled(self) -> bool:
+        if not settings.WEB_PUBLIC_STREAMS_ENABLED:
+            # To help protect against accidentally web-public streams in
+            # self-hosted servers, we require the feature to be enabled at
+            # the server level before it is available to users.
+            return False
+
+        if self.plan_type == Realm.LIMITED:
+            # In Zulip Cloud, we also require a paid or sponsored
+            # plan, to protect against the spam/abuse attacks that
+            # target every open Internet service that can host files.
+            return False
+
+        return True
+
+    def has_web_public_streams(self) -> bool:
+        """
+        If any of the streams in the realm is web
+        public, then the realm is web public.
+        """
+        if not self.web_public_streams_enabled():
+            return False
+
+        from zerver.lib.streams import get_web_public_streams_queryset
+
+        return get_web_public_streams_queryset(self).exists()
+
 
 post_save.connect(flush_realm, sender=Realm)
 
@@ -987,9 +1040,13 @@ class RealmEmoji(models.Model):
     # The basename of the custom emoji's filename; see PATH_ID_TEMPLATE for the full path.
     file_name: Optional[str] = models.TextField(db_index=True, null=True, blank=True)
 
+    # Whether this custom emoji is an animated image.
+    is_animated: bool = models.BooleanField(default=False)
+
     deactivated: bool = models.BooleanField(default=False)
 
     PATH_ID_TEMPLATE = "{realm_id}/emoji/images/{emoji_file_name}"
+    STILL_PATH_ID_TEMPLATE = "{realm_id}/emoji/images/still/{emoji_filename_without_extension}.png"
 
     def __str__(self) -> str:
         return f"<RealmEmoji({self.realm.string_id}): {self.id} {self.name} {self.deactivated} {self.file_name}>"
@@ -1009,13 +1066,26 @@ def get_realm_emoji_dicts(
         if realm_emoji.author:
             author_id = realm_emoji.author_id
         emoji_url = get_emoji_url(realm_emoji.file_name, realm_emoji.realm_id)
-        d[str(realm_emoji.id)] = dict(
+
+        emoji_dict = dict(
             id=str(realm_emoji.id),
             name=realm_emoji.name,
             source_url=emoji_url,
             deactivated=realm_emoji.deactivated,
             author_id=author_id,
         )
+
+        if realm_emoji.is_animated:
+            # For animated emoji, we include still_url with a static
+            # version of the image, so that clients can display the
+            # emoji in a less distracting (not animated) fashion when
+            # desired.
+            emoji_dict["still_url"] = get_emoji_url(
+                realm_emoji.file_name, realm_emoji.realm_id, still=True
+            )
+
+        d[str(realm_emoji.id)] = emoji_dict
+
     return d
 
 
@@ -1048,21 +1118,21 @@ post_delete.connect(flush_realm_emoji, sender=RealmEmoji)
 
 
 def filter_pattern_validator(value: str) -> Pattern[str]:
-    regex = re.compile(r"^(?:(?:[\w\-#_= /:]*|[+]|[!])(\(\?P<\w+>.+\)))+$")
-    error_msg = _("Invalid linkifier pattern.  Valid characters are {}.").format(
-        "[ a-zA-Z_#=/:+!-]",
-    )
-
-    if not regex.match(str(value)):
-        raise ValidationError(error_msg)
-
     try:
-        pattern = re.compile(value)
-    except re.error:
-        # Regex is invalid
-        raise ValidationError(error_msg)
+        # Do not write errors to stderr (this still raises exceptions)
+        options = re2.Options()
+        options.log_errors = False
 
-    return pattern
+        regex = re2.compile(value, options=options)
+    except re2.error as e:
+        if len(e.args) >= 1:
+            if isinstance(e.args[0], str):  # nocoverage
+                raise ValidationError(_("Bad regular expression: {}").format(e.args[0]))
+            if isinstance(e.args[0], bytes):
+                raise ValidationError(_("Bad regular expression: {}").format(e.args[0].decode()))
+        raise ValidationError(_("Unknown regular expression error"))  # nocoverage
+
+    return regex
 
 
 def filter_format_validator(value: str) -> None:
@@ -1329,7 +1399,7 @@ class UserBaseSettings(models.Model):
         default=DEMOTE_STREAMS_AUTOMATIC
     )
 
-    # Emojisets
+    # Emoji sets
     GOOGLE_EMOJISET = "google"
     GOOGLE_BLOB_EMOJISET = "google-blob"
     TEXT_EMOJISET = "text"
@@ -1341,7 +1411,7 @@ class UserBaseSettings(models.Model):
         (TEXT_EMOJISET, "Plain text"),
     )
     emojiset: str = models.CharField(
-        default=GOOGLE_BLOB_EMOJISET, choices=EMOJISET_CHOICES, max_length=20
+        default=GOOGLE_EMOJISET, choices=EMOJISET_CHOICES, max_length=20
     )
 
     ### Notifications settings. ###
@@ -1368,6 +1438,11 @@ class UserBaseSettings(models.Model):
     DESKTOP_ICON_COUNT_DISPLAY_MESSAGES = 1
     DESKTOP_ICON_COUNT_DISPLAY_NOTIFIABLE = 2
     DESKTOP_ICON_COUNT_DISPLAY_NONE = 3
+    DESKTOP_ICON_COUNT_DISPLAY_CHOICES = [
+        DESKTOP_ICON_COUNT_DISPLAY_MESSAGES,
+        DESKTOP_ICON_COUNT_DISPLAY_NOTIFIABLE,
+        DESKTOP_ICON_COUNT_DISPLAY_NONE,
+    ]
     desktop_icon_count_display: int = models.PositiveSmallIntegerField(
         default=DESKTOP_ICON_COUNT_DISPLAY_MESSAGES
     )
@@ -1381,8 +1456,12 @@ class UserBaseSettings(models.Model):
     # Whether or not the user wants to sync their drafts.
     enable_drafts_synchronization = models.BooleanField(default=True)
 
-    # Define the types of the various automatically managed properties
-    property_types = dict(
+    # Privacy settings
+    send_stream_typing_notifications: bool = models.BooleanField(default=True)
+    send_private_typing_notifications: bool = models.BooleanField(default=True)
+    send_read_receipts: bool = models.BooleanField(default=True)
+
+    display_settings_legacy = dict(
         color_scheme=int,
         default_language=str,
         default_view=str,
@@ -1399,7 +1478,7 @@ class UserBaseSettings(models.Model):
         twenty_four_hour_time=bool,
     )
 
-    notification_setting_types = dict(
+    notification_settings_legacy = dict(
         enable_desktop_notifications=bool,
         enable_digest_emails=bool,
         enable_login_emails=bool,
@@ -1422,8 +1501,30 @@ class UserBaseSettings(models.Model):
         presence_enabled=bool,
     )
 
+    notification_setting_types = {
+        **notification_settings_legacy
+    }  # Add new notifications settings here.
+
+    # Define the types of the various automatically managed properties
+    property_types = {
+        **display_settings_legacy,
+        **notification_setting_types,
+        **dict(
+            # Add new general settings here.
+            send_stream_typing_notifications=bool,
+            send_private_typing_notifications=bool,
+            send_read_receipts=bool,
+        ),
+    }
+
     class Meta:
         abstract = True
+
+    @staticmethod
+    def emojiset_choices() -> List[Dict[str, str]]:
+        return [
+            dict(key=emojiset[0], text=emojiset[1]) for emojiset in UserProfile.EMOJISET_CHOICES
+        ]
 
 
 class RealmUserDefault(UserBaseSettings):
@@ -1642,7 +1743,6 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
     def get_role_name(self) -> str:
         return self.ROLE_ID_TO_NAME_MAP[self.role]
 
-    @property
     def profile_data(self) -> ProfileData:
         values = CustomProfileFieldValue.objects.filter(user_profile=self)
         user_data = {
@@ -1723,6 +1823,15 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
     def is_realm_owner(self) -> bool:
         return self.role == UserProfile.ROLE_REALM_OWNER
 
+    @is_realm_owner.setter
+    def is_realm_owner(self, value: bool) -> None:
+        if value:
+            self.role = UserProfile.ROLE_REALM_OWNER
+        elif self.role == UserProfile.ROLE_REALM_OWNER:
+            # We need to be careful to not accidentally change
+            # ROLE_GUEST to ROLE_MEMBER here.
+            self.role = UserProfile.ROLE_MEMBER
+
     @property
     def is_guest(self) -> bool:
         return self.role == UserProfile.ROLE_GUEST
@@ -1739,6 +1848,15 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
     @property
     def is_moderator(self) -> bool:
         return self.role == UserProfile.ROLE_MODERATOR
+
+    @is_moderator.setter
+    def is_moderator(self, value: bool) -> None:
+        if value:
+            self.role = UserProfile.ROLE_MODERATOR
+        elif self.role == UserProfile.ROLE_MODERATOR:
+            # We need to be careful to not accidentally change
+            # ROLE_GUEST to ROLE_MEMBER here.
+            self.role = UserProfile.ROLE_MEMBER
 
     @property
     def is_incoming_webhook(self) -> bool:
@@ -1760,12 +1878,6 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
             allowed_bot_types.append(UserProfile.EMBEDDED_BOT)
         return allowed_bot_types
 
-    @staticmethod
-    def emojiset_choices() -> List[Dict[str, str]]:
-        return [
-            dict(key=emojiset[0], text=emojiset[1]) for emojiset in UserProfile.EMOJISET_CHOICES
-        ]
-
     def email_address_is_realm_public(self) -> bool:
         if self.realm.email_address_visibility == Realm.EMAIL_ADDRESS_VISIBILITY_EVERYONE:
             return True
@@ -1776,7 +1888,10 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
     def has_permission(self, policy_name: str) -> bool:
         if policy_name not in [
             "add_custom_emoji_policy",
-            "create_stream_policy",
+            "create_private_stream_policy",
+            "create_public_stream_policy",
+            "create_web_public_stream_policy",
+            "delete_own_message_policy",
             "edit_topic_policy",
             "invite_to_stream_policy",
             "invite_to_realm_policy",
@@ -1787,6 +1902,15 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
 
         policy_value = getattr(self.realm, policy_name)
         if policy_value == Realm.POLICY_NOBODY:
+            return False
+
+        if policy_value == Realm.POLICY_EVERYONE:
+            return True
+
+        if self.is_realm_owner:
+            return True
+
+        if policy_value == Realm.POLICY_OWNERS_ONLY:
             return False
 
         if self.is_realm_admin:
@@ -1810,8 +1934,16 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
         assert policy_value == Realm.POLICY_FULL_MEMBERS_ONLY
         return not self.is_provisional_member
 
-    def can_create_streams(self) -> bool:
-        return self.has_permission("create_stream_policy")
+    def can_create_public_streams(self) -> bool:
+        return self.has_permission("create_public_stream_policy")
+
+    def can_create_private_streams(self) -> bool:
+        return self.has_permission("create_private_stream_policy")
+
+    def can_create_web_public_streams(self) -> bool:
+        if not self.realm.web_public_streams_enabled():
+            return False
+        return self.has_permission("create_web_public_stream_policy")
 
     def can_subscribe_other_users(self) -> bool:
         return self.has_permission("invite_to_stream_policy")
@@ -1826,12 +1958,13 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
         return self.has_permission("user_group_edit_policy")
 
     def can_edit_topic_of_any_message(self) -> bool:
-        if self.realm.edit_topic_policy == Realm.POLICY_EVERYONE:
-            return True
         return self.has_permission("edit_topic_policy")
 
     def can_add_custom_emoji(self) -> bool:
         return self.has_permission("add_custom_emoji_policy")
+
+    def can_delete_own_message(self) -> bool:
+        return self.has_permission("delete_own_message_policy")
 
     def can_access_public_streams(self) -> bool:
         return not (self.is_guest or self.realm.is_zephyr_mirror_realm)
@@ -1863,9 +1996,19 @@ class PasswordTooWeakError(Exception):
 
 
 class UserGroup(models.Model):
+    objects = CTEManager()
     id: int = models.AutoField(auto_created=True, primary_key=True, verbose_name="ID")
     name: str = models.CharField(max_length=100)
-    members: Manager = models.ManyToManyField(UserProfile, through="UserGroupMembership")
+    direct_members: Manager = models.ManyToManyField(
+        UserProfile, through="UserGroupMembership", related_name="direct_groups"
+    )
+    direct_subgroups: Manager = models.ManyToManyField(
+        "self",
+        symmetrical=False,
+        through="GroupGroupMembership",
+        through_fields=("supergroup", "subgroup"),
+        related_name="direct_supergroups",
+    )
     realm: Realm = models.ForeignKey(Realm, on_delete=CASCADE)
     description: str = models.TextField(default="")
     is_system_group: bool = models.BooleanField(default=False)
@@ -1876,11 +2019,24 @@ class UserGroup(models.Model):
 
 class UserGroupMembership(models.Model):
     id: int = models.AutoField(auto_created=True, primary_key=True, verbose_name="ID")
-    user_group: UserGroup = models.ForeignKey(UserGroup, on_delete=CASCADE)
-    user_profile: UserProfile = models.ForeignKey(UserProfile, on_delete=CASCADE)
+    user_group: UserGroup = models.ForeignKey(UserGroup, on_delete=CASCADE, related_name="+")
+    user_profile: UserProfile = models.ForeignKey(UserProfile, on_delete=CASCADE, related_name="+")
 
     class Meta:
         unique_together = (("user_group", "user_profile"),)
+
+
+class GroupGroupMembership(models.Model):
+    id: int = models.AutoField(auto_created=True, primary_key=True, verbose_name="ID")
+    supergroup: UserGroup = models.ForeignKey(UserGroup, on_delete=CASCADE, related_name="+")
+    subgroup: UserGroup = models.ForeignKey(UserGroup, on_delete=CASCADE, related_name="+")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["supergroup", "subgroup"], name="zerver_groupgroupmembership_uniq"
+            )
+        ]
 
 
 def remote_user_to_email(remote_user: str) -> str:
@@ -1908,6 +2064,7 @@ class PreregistrationUser(models.Model):
     id: int = models.AutoField(auto_created=True, primary_key=True, verbose_name="ID")
     email: str = models.EmailField()
 
+    confirmation = GenericRelation("confirmation.Confirmation", related_query_name="prereg_user")
     # If the pre-registration process provides a suggested full name for this user,
     # store it here to use it to prepopulate the full name field in the registration form:
     full_name: Optional[str] = models.CharField(max_length=UserProfile.MAX_NAME_LENGTH, null=True)
@@ -1942,14 +2099,19 @@ class PreregistrationUser(models.Model):
     invited_as: int = models.PositiveSmallIntegerField(default=INVITE_AS["MEMBER"])
 
 
-def filter_to_valid_prereg_users(query: QuerySet) -> QuerySet:
-    days_to_activate = settings.INVITATION_LINK_VALIDITY_DAYS
+def filter_to_valid_prereg_users(
+    query: QuerySet,
+    invite_expires_in_days: Optional[int] = None,
+) -> QuerySet:
     active_value = confirmation_settings.STATUS_ACTIVE
     revoked_value = confirmation_settings.STATUS_REVOKED
-    lowest_datetime = timezone_now() - datetime.timedelta(days=days_to_activate)
-    return query.exclude(status__in=[active_value, revoked_value]).filter(
-        invited_at__gte=lowest_datetime
-    )
+
+    query = query.exclude(status__in=[active_value, revoked_value])
+    if invite_expires_in_days:
+        lowest_datetime = timezone_now() - datetime.timedelta(days=invite_expires_in_days)
+        return query.filter(invited_at__gte=lowest_datetime)
+    else:
+        return query.filter(confirmation__expiry_date__gte=timezone_now())
 
 
 class MultiuseInvite(models.Model):
@@ -2151,23 +2313,57 @@ class UserTopic(models.Model):
     stream: Stream = models.ForeignKey(Stream, on_delete=CASCADE)
     recipient: Recipient = models.ForeignKey(Recipient, on_delete=CASCADE)
     topic_name: str = models.CharField(max_length=MAX_TOPIC_NAME_LENGTH)
-    # The default value for date_muted is a few weeks before tracking
+    # The default value for last_updated is a few weeks before tracking
     # of when topics were muted was first introduced.  It's designed
-    # to be obviously incorrect so that users can tell it's backfilled data.
-    date_muted: datetime.datetime = models.DateTimeField(
+    # to be obviously incorrect so that one can tell it's backfilled data.
+    last_updated: datetime.datetime = models.DateTimeField(
         default=datetime.datetime(2020, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)
+    )
+
+    # Implicitly, if a UserTopic does not exist, the (user, topic)
+    # pair should have normal behavior for that (user, stream) pair.
+
+    # A normal muted topic. No notifications and unreads hidden.
+    MUTED = 1
+
+    # This topic will behave like an unmuted topic in an unmuted stream even if it
+    # belongs to a muted stream.
+    UNMUTED = 2
+
+    # This topic will behave like `UNMUTED`, plus will also always trigger notifications.
+    FOLLOWED = 3
+
+    visibility_policy_choices = (
+        (MUTED, "Muted topic"),
+        (UNMUTED, "Unmuted topic in muted stream"),
+        (FOLLOWED, "Followed topic"),
+    )
+
+    visibility_policy: int = models.SmallIntegerField(
+        choices=visibility_policy_choices, default=MUTED
     )
 
     class Meta:
         unique_together = ("user_profile", "stream", "topic_name")
 
-        # This model was originally called "MutedTopic". We
-        # generalized it to "UserTopic", but have not yet done the
-        # database migration to rename the table and indexes.
-        db_table = "zerver_mutedtopic"
+        indexes = [
+            # This index is designed to optimize queries fetching the
+            # set of users who have special policy for a stream,
+            # e.g. for the send-message code paths.
+            models.Index(
+                fields=("stream", "topic_name", "visibility_policy", "user_profile"),
+                name="zerver_usertopic_stream_topic_user_visibility_idx",
+            ),
+            # This index is useful for handling API requests fetching the
+            # muted topics for a given user or user/stream pair.
+            models.Index(
+                fields=("user_profile", "visibility_policy", "stream", "topic_name"),
+                name="zerver_usertopic_user_visibility_idx",
+            ),
+        ]
 
     def __str__(self) -> str:
-        return f"<UserTopic: ({self.user_profile.email}, {self.stream.name}, {self.topic_name}, {self.date_muted})>"
+        return f"<UserTopic: ({self.user_profile.email}, {self.stream.name}, {self.topic_name}, {self.last_updated})>"
 
 
 class MutedUser(models.Model):
@@ -3611,7 +3807,7 @@ class AbstractRealmAuditLog(models.Model):
     USER_DEFAULT_SENDING_STREAM_CHANGED = 129
     USER_DEFAULT_REGISTER_STREAM_CHANGED = 130
     USER_DEFAULT_ALL_PUBLIC_STREAMS_CHANGED = 131
-    USER_NOTIFICATION_SETTINGS_CHANGED = 132
+    USER_SETTING_CHANGED = 132
     USER_DIGEST_EMAIL_CREATED = 133
 
     REALM_DEACTIVATED = 201
@@ -3629,6 +3825,8 @@ class AbstractRealmAuditLog(models.Model):
     REALM_SPONSORSHIP_PENDING_STATUS_CHANGED = 213
     REALM_SUBDOMAIN_CHANGED = 214
     REALM_CREATED = 215
+    REALM_DEFAULT_USER_SETTINGS_CHANGED = 216
+    REALM_ORG_TYPE_CHANGED = 217
 
     SUBSCRIPTION_CREATED = 301
     SUBSCRIPTION_ACTIVATED = 302
@@ -3784,7 +3982,7 @@ class CustomProfileField(models.Model):
         (SELECT, gettext_lazy("List of options"), validate_select_field, str, "SELECT"),
     ]
     USER_FIELD_TYPE_DATA: List[UserFieldElement] = [
-        (USER, gettext_lazy("Person picker"), check_valid_user_ids, ast.literal_eval, "USER"),
+        (USER, gettext_lazy("Person picker"), check_valid_user_ids, orjson.loads, "USER"),
     ]
 
     SELECT_FIELD_VALIDATORS: Dict[int, ExtendedValidator] = {
@@ -3811,7 +4009,7 @@ class CustomProfileField(models.Model):
 
     ALL_FIELD_TYPES = [*FIELD_TYPE_DATA, *SELECT_FIELD_TYPE_DATA, *USER_FIELD_TYPE_DATA]
 
-    FIELD_VALIDATORS: Dict[int, Validator[Union[int, str, List[int]]]] = {
+    FIELD_VALIDATORS: Dict[int, Validator[ProfileDataElementValue]] = {
         item[0]: item[2] for item in FIELD_TYPE_DATA
     }
     FIELD_CONVERTERS: Dict[int, Callable[[Any], Any]] = {

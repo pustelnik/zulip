@@ -54,7 +54,7 @@ export function update_property(stream_id, property, value, other_values) {
         case "email_notifications":
         case "wildcard_mentions_notify":
             update_stream_setting(sub, value, property);
-            settings_notifications.update_page();
+            settings_notifications.update_page(settings_notifications.user_settings_panel);
             break;
         case "name":
             stream_settings_ui.update_stream_name(sub, value);
@@ -77,6 +77,7 @@ export function update_property(stream_id, property, value, other_values) {
             stream_settings_ui.update_stream_privacy(sub, {
                 invite_only: value,
                 history_public_to_subscribers: other_values.history_public_to_subscribers,
+                is_web_public: other_values.is_web_public,
             });
             break;
         case "stream_post_policy":

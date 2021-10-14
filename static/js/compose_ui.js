@@ -1,5 +1,6 @@
 import autosize from "autosize";
 import $ from "jquery";
+import {set, wrapSelection} from "text-field-edit";
 
 import * as common from "./common";
 import {$t} from "./i18n";
@@ -138,14 +139,6 @@ export function compute_placeholder_text(opts) {
     return $t({defaultMessage: "Compose your message here"});
 }
 
-export function wrap_text_with_markdown(textarea, prefix, suffix) {
-    const range = textarea.range();
-
-    if (!document.execCommand("insertText", false, prefix + range.text + suffix)) {
-        textarea.range(range.start, range.end).range(prefix + range.text + suffix);
-    }
-}
-
 export function set_compose_box_top(set_top) {
     if (set_top) {
         // As `#compose` has `position: fixed` property, we cannot
@@ -203,67 +196,193 @@ export function handle_keydown(event, textarea) {
     // key was on. We turn to key to lowercase so the keybindings
     // work regardless of whether Caps Lock was on or not.
     const key = event.key.toLowerCase();
-    const isBold = key === "b";
-    const isItalic = key === "i" && !event.shiftKey;
-    const isLink = key === "l" && event.shiftKey;
+    let type;
+    if (key === "b") {
+        type = "bold";
+    } else if (key === "i" && !event.shiftKey) {
+        type = "italic";
+    } else if (key === "l" && event.shiftKey) {
+        type = "link";
+    }
 
     // detect Cmd and Ctrl key
     const isCmdOrCtrl = common.has_mac_keyboard() ? event.metaKey : event.ctrlKey;
 
-    if ((isBold || isItalic || isLink) && isCmdOrCtrl) {
-        const range = textarea.range();
-
-        if (isBold) {
-            // Ctrl + B: Convert selected text to bold text
-            wrap_text_with_markdown(textarea, "**", "**");
-            event.preventDefault();
-
-            if (!range.length) {
-                textarea.caret(textarea.caret() - 2);
-            }
-        }
-
-        if (isItalic) {
-            // Ctrl + I: Convert selected text to italic text
-            wrap_text_with_markdown(textarea, "*", "*");
-            event.preventDefault();
-
-            if (!range.length) {
-                textarea.caret(textarea.caret() - 1);
-            }
-        }
-
-        if (isLink) {
-            // Ctrl + L: Insert a link to selected text
-            wrap_text_with_markdown(textarea, "[", "](url)");
-            event.preventDefault();
-
-            const position = textarea.caret();
-            const txt = textarea[0];
-
-            // Include selected text in between [] parentheses and insert '(url)'
-            // where "url" should be automatically selected.
-            // Position of cursor depends on whether browser supports exec
-            // command or not. So set cursor position accordingly.
-            if (range.length > 0) {
-                if (document.queryCommandEnabled("insertText")) {
-                    txt.selectionStart = position - 4;
-                    txt.selectionEnd = position - 1;
-                } else {
-                    txt.selectionStart = position + range.length + 3;
-                    txt.selectionEnd = position + range.length + 6;
-                }
-            } else {
-                textarea.caret(textarea.caret() - 6);
-            }
-        }
-
+    if (type && isCmdOrCtrl) {
+        format_text(textarea, type);
         autosize_textarea(textarea);
-        return;
+        event.preventDefault();
     }
 }
 
 export function handle_keyup(event, textarea) {
     // Set the rtl class if the text has an rtl direction, remove it otherwise
     rtl.set_rtl_class_for_textarea(textarea);
+}
+
+export function format_text(textarea, type) {
+    const italic_syntax = "*";
+    const bold_syntax = "**";
+    const bold_and_italic_syntax = "***";
+    let is_selected_text_italic = false;
+    let is_inner_text_italic = false;
+    const field = textarea.get(0);
+    let range = textarea.range();
+    let text = textarea.val();
+    const selected_text = range.text;
+
+    // Remove new line and space around selected text.
+    const left_trim_length = range.text.length - range.text.trimStart().length;
+    const right_trim_length = range.text.length - range.text.trimEnd().length;
+
+    field.setSelectionRange(range.start + left_trim_length, range.end - right_trim_length);
+    range = textarea.range();
+
+    const is_selection_bold = () =>
+        // First check if there are enough characters before/after selection.
+        range.start >= bold_syntax.length &&
+        text.length - range.end >= bold_syntax.length &&
+        // And then if the characters have bold_syntax around them.
+        text.slice(range.start - bold_syntax.length, range.start) === bold_syntax &&
+        text.slice(range.end, range.end + bold_syntax.length) === bold_syntax;
+
+    const is_inner_text_bold = () =>
+        // Check if selected text itself has bold_syntax inside it.
+        range.length > 4 &&
+        selected_text.slice(0, bold_syntax.length) === bold_syntax &&
+        selected_text.slice(-bold_syntax.length) === bold_syntax;
+
+    switch (type) {
+        case "bold":
+            // Ctrl + B: Toggle bold syntax on selection.
+
+            // If the selection is already surrounded by bold syntax,
+            // remove it rather than adding another copy.
+            if (is_selection_bold()) {
+                // Remove the bold_syntax from text.
+                text =
+                    text.slice(0, range.start - bold_syntax.length) +
+                    text.slice(range.start, range.end) +
+                    text.slice(range.end + bold_syntax.length);
+                set(field, text);
+                field.setSelectionRange(
+                    range.start - bold_syntax.length,
+                    range.end - bold_syntax.length,
+                );
+                break;
+            } else if (is_inner_text_bold()) {
+                // Remove bold syntax inside the selection, if present.
+                text =
+                    text.slice(0, range.start) +
+                    text.slice(range.start + bold_syntax.length, range.end - bold_syntax.length) +
+                    text.slice(range.end);
+                set(field, text);
+                field.setSelectionRange(range.start, range.end - bold_syntax.length * 2);
+                break;
+            }
+
+            // Otherwise, we don't have bold syntax, so we add it.
+            wrapSelection(field, bold_syntax);
+            break;
+        case "italic":
+            // Ctrl + I: Toggle italic syntax on selection. This is
+            // much more complex than toggling bold syntax, because of
+            // the following subtle detail: If our selection is
+            // **foo**, toggling italics should add italics, since in
+            // fact it's just bold syntax, even though with *foo* and
+            // ***foo*** should remove italics.
+
+            // If the text is already italic, we remove the italic_syntax from text.
+            if (range.start >= 1 && text.length - range.end >= italic_syntax.length) {
+                // If text has italic_syntax around it.
+                const has_italic_syntax =
+                    text.slice(range.start - italic_syntax.length, range.start) === italic_syntax &&
+                    text.slice(range.end, range.end + italic_syntax.length) === italic_syntax;
+
+                if (is_selection_bold()) {
+                    // If text has bold_syntax around it.
+                    if (
+                        range.start >= 3 &&
+                        text.length - range.end >= bold_and_italic_syntax.length
+                    ) {
+                        // If text is both bold and italic.
+                        const has_bold_and_italic_syntax =
+                            text.slice(range.start - bold_and_italic_syntax.length, range.start) ===
+                                bold_and_italic_syntax &&
+                            text.slice(range.end, range.end + bold_and_italic_syntax.length) ===
+                                bold_and_italic_syntax;
+                        if (has_bold_and_italic_syntax) {
+                            is_selected_text_italic = true;
+                        }
+                    }
+                } else if (has_italic_syntax) {
+                    // If text is only italic.
+                    is_selected_text_italic = true;
+                }
+            }
+
+            if (is_selected_text_italic) {
+                // If text has italic syntax around it, we remove the italic syntax.
+                text =
+                    text.slice(0, range.start - italic_syntax.length) +
+                    text.slice(range.start, range.end) +
+                    text.slice(range.end + italic_syntax.length);
+                set(field, text);
+                field.setSelectionRange(
+                    range.start - italic_syntax.length,
+                    range.end - italic_syntax.length,
+                );
+                break;
+            } else if (
+                selected_text.length > italic_syntax.length * 2 &&
+                // If the selected text contains italic syntax
+                selected_text.slice(0, italic_syntax.length) === italic_syntax &&
+                selected_text.slice(-italic_syntax.length) === italic_syntax
+            ) {
+                if (is_inner_text_bold()) {
+                    if (
+                        selected_text.length > bold_and_italic_syntax.length * 2 &&
+                        selected_text.slice(0, bold_and_italic_syntax.length) ===
+                            bold_and_italic_syntax &&
+                        selected_text.slice(-bold_and_italic_syntax.length) ===
+                            bold_and_italic_syntax
+                    ) {
+                        // If selected text is both bold and italic.
+                        is_inner_text_italic = true;
+                    }
+                } else {
+                    // If selected text is only italic.
+                    is_inner_text_italic = true;
+                }
+            }
+
+            if (is_inner_text_italic) {
+                // We remove the italic_syntax from within the selected text.
+                text =
+                    text.slice(0, range.start) +
+                    text.slice(
+                        range.start + italic_syntax.length,
+                        range.end - italic_syntax.length,
+                    ) +
+                    text.slice(range.end);
+                set(field, text);
+                field.setSelectionRange(range.start, range.end - italic_syntax.length * 2);
+                break;
+            }
+
+            wrapSelection(field, italic_syntax);
+            break;
+        case "link": {
+            // Ctrl + L: Insert a link to selected text
+            wrapSelection(field, "[", "](url)");
+
+            // Change selected text to `url` part of the syntax.
+            // If <text> marks the selected region, we're mapping:
+            // <text> => [text](<url>).
+            const new_start = range.end + "[](".length;
+            const new_end = new_start + "url".length;
+            field.setSelectionRange(new_start, new_end);
+            break;
+        }
+    }
 }

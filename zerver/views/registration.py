@@ -1,6 +1,6 @@
 import logging
 import urllib
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -38,9 +38,9 @@ from zerver.lib.actions import (
     do_activate_mirror_dummy_user,
     do_change_full_name,
     do_change_password,
+    do_change_user_setting,
     do_create_realm,
     do_create_user,
-    do_set_user_display_setting,
     lookup_default_stream_groups,
 )
 from zerver.lib.email_validation import email_allowed_for_realm, validate_email_not_already_in_realm
@@ -420,7 +420,7 @@ def accounts_register(
             do_activate_mirror_dummy_user(user_profile, acting_user=user_profile)
             do_change_password(user_profile, password)
             do_change_full_name(user_profile, full_name, user_profile)
-            do_set_user_display_setting(user_profile, "timezone", timezone)
+            do_change_user_setting(user_profile, "timezone", timezone, acting_user=user_profile)
             # TODO: When we clean up the `do_activate_mirror_dummy_user` code path,
             # make it respect invited_as_admin / is_realm_admin.
 
@@ -716,8 +716,6 @@ def accounts_home_from_multiuse_invite(request: HttpRequest, confirmation_key: s
 def find_account(
     request: HttpRequest, raw_emails: Optional[str] = REQ("emails", default=None)
 ) -> HttpResponse:
-    from zerver.context_processors import common_context
-
     url = reverse("find_account")
 
     emails: List[str] = []
@@ -743,17 +741,32 @@ def find_account(
             for email in emails:
                 emails_q |= Q(delivery_email__iexact=email)
 
-            for user in UserProfile.objects.filter(
+            user_profiles = UserProfile.objects.filter(
                 emails_q, is_active=True, is_bot=False, realm__deactivated=False
-            ):
-                context = common_context(user)
-                context.update(
-                    email=user.delivery_email,
-                )
+            )
+
+            # We organize the data in preparation for sending exactly
+            # one outgoing email per provided email address, with each
+            # email listing all of the accounts that email address has
+            # with the current Zulip server.
+            context: Dict[str, Dict[str, Any]] = {}
+            for user in user_profiles:
+                key = user.delivery_email.lower()
+                context.setdefault(key, {})
+                context[key].setdefault("realms", [])
+                context[key]["realms"].append(user.realm)
+                context[key]["external_host"] = settings.EXTERNAL_HOST
+                # This value will end up being the last user ID among
+                # matching accounts; since it's only used for minor
+                # details like language, that arbitrary choice is OK.
+                context[key]["to_user_id"] = user.id
+
+            for delivery_email, realm_context in context.items():
+                realm_context["email"] = delivery_email
                 send_email(
                     "zerver/emails/find_team",
-                    to_user_ids=[user.id],
-                    context=context,
+                    to_user_ids=[realm_context["to_user_id"]],
+                    context=realm_context,
                     from_address=FromAddress.SUPPORT,
                     request=request,
                 )

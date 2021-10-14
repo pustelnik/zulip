@@ -108,7 +108,7 @@ export const stream_privacy_policy_values = {
         name: $t({defaultMessage: "Public"}),
         description: $t({
             defaultMessage:
-                "Anyone can join; anyone can view complete message history without joining",
+                "Organization members can join (guests must be invited by a subscriber); organization members can view complete message history without joining",
         }),
     },
     private_with_public_history: {
@@ -116,7 +116,7 @@ export const stream_privacy_policy_values = {
         name: $t({defaultMessage: "Private, shared history"}),
         description: $t({
             defaultMessage:
-                "Must be invited by a member; new members can view complete message history; hidden from non-administrator users",
+                "Must be invited by a subscriber; new subscribers can view complete message history; hidden from non-administrator users",
         }),
     },
     private: {
@@ -124,10 +124,21 @@ export const stream_privacy_policy_values = {
         name: $t({defaultMessage: "Private, protected history"}),
         description: $t({
             defaultMessage:
-                "Must be invited by a member; new members can only see messages sent after they join; hidden from non-administrator users",
+                "Must be invited by a subscriber; new subscribers can only see messages sent after they join; hidden from non-administrator users",
         }),
     },
 };
+
+if (page_params.development_environment) {
+    stream_privacy_policy_values.web_public = {
+        code: "web-public",
+        name: $t({defaultMessage: "Web public"}),
+        description: $t({
+            defaultMessage:
+                "Organization members can join (guests must be invited by a subscriber); anyone on the Internet can view complete message history without creating an account",
+        }),
+    };
+}
 
 export const stream_post_policy_values = {
     everyone: {
@@ -443,6 +454,7 @@ export function update_stream_post_policy(sub, stream_post_policy) {
 export function update_stream_privacy(sub, values) {
     sub.invite_only = values.invite_only;
     sub.history_public_to_subscribers = values.history_public_to_subscribers;
+    sub.is_web_public = values.is_web_public;
 }
 
 export function update_message_retention_setting(sub, message_retention_days) {
@@ -544,6 +556,9 @@ export function id_is_subscribed(stream_id) {
 export function get_stream_privacy_policy(stream_id) {
     const sub = sub_store.get(stream_id);
 
+    if (sub.is_web_public) {
+        return stream_privacy_policy_values.web_public.code;
+    }
     if (!sub.invite_only) {
         return stream_privacy_policy_values.public.code;
     }
@@ -551,6 +566,11 @@ export function get_stream_privacy_policy(stream_id) {
         return stream_privacy_policy_values.private.code;
     }
     return stream_privacy_policy_values.private_with_public_history.code;
+}
+
+export function is_web_public(stream_id) {
+    const sub = sub_store.get(stream_id);
+    return sub !== undefined && sub.is_web_public;
 }
 
 export function get_invite_only(stream_name) {
@@ -673,11 +693,11 @@ export function create_sub_from_server_data(attrs) {
         newly_subscribed: false,
         is_muted: false,
         invite_only: false,
-        desktop_notifications: user_settings.enable_stream_desktop_notifications,
-        audible_notifications: user_settings.enable_stream_audible_notifications,
-        push_notifications: user_settings.enable_stream_push_notifications,
-        email_notifications: user_settings.enable_stream_email_notifications,
-        wildcard_mentions_notify: user_settings.wildcard_mentions_notify,
+        desktop_notifications: null,
+        audible_notifications: null,
+        push_notifications: null,
+        email_notifications: null,
+        wildcard_mentions_notify: null,
         description: "",
         rendered_description: "",
         first_message_id: attrs.first_message_id,

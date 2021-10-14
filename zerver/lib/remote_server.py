@@ -12,7 +12,13 @@ from analytics.models import InstallationCount, RealmCount
 from version import ZULIP_VERSION
 from zerver.lib.exceptions import JsonableError
 from zerver.lib.export import floatify_datetime_fields
+from zerver.lib.outgoing_http import OutgoingSession
 from zerver.models import RealmAuditLog
+
+
+class PushBouncerSession(OutgoingSession):
+    def __init__(self) -> None:
+        super().__init__(role="push_bouncer", timeout=30)
 
 
 class PushNotificationBouncerException(Exception):
@@ -55,8 +61,8 @@ def send_to_push_bouncer(
     headers.update(extra_headers)
 
     try:
-        res = requests.request(
-            method, url, data=post_data, auth=api_auth, timeout=30, verify=True, headers=headers
+        res = PushBouncerSession().request(
+            method, url, data=post_data, auth=api_auth, verify=True, headers=headers
         )
     except (
         requests.exceptions.Timeout,
@@ -101,8 +107,10 @@ def send_to_push_bouncer(
     return orjson.loads(res.content)
 
 
-def send_json_to_push_bouncer(method: str, endpoint: str, post_data: Mapping[str, object]) -> None:
-    send_to_push_bouncer(
+def send_json_to_push_bouncer(
+    method: str, endpoint: str, post_data: Mapping[str, object]
+) -> Dict[str, object]:
+    return send_to_push_bouncer(
         method,
         endpoint,
         orjson.dumps(post_data),

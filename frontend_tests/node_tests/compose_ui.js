@@ -460,8 +460,169 @@ run_test("test_compose_height_changes", ({override}) => {
     assert.ok(!compose_box_top_set);
 });
 
+run_test("format_text", () => {
+    let set_text = "";
+    let wrap_selection_called = false;
+    let wrap_syntax = "";
+
+    mock_esm("text-field-edit", {
+        set: (field, text) => {
+            set_text = text;
+        },
+        wrapSelection: (field, syntax) => {
+            wrap_selection_called = true;
+            wrap_syntax = syntax;
+        },
+    });
+
+    function reset_state() {
+        set_text = "";
+        wrap_selection_called = false;
+        wrap_syntax = "";
+    }
+
+    const textarea = $("#compose-textarea");
+    textarea.get = () => ({
+        setSelectionRange: () => {},
+    });
+
+    function init_textarea(val, range) {
+        textarea.val = () => val;
+        textarea.range = () => range;
+    }
+
+    const italic_syntax = "*";
+    const bold_syntax = "**";
+
+    // Bold selected text
+    reset_state();
+    init_textarea("abc", {
+        start: 0,
+        end: 3,
+        text: "abc",
+        length: 3,
+    });
+    compose_ui.format_text(textarea, "bold");
+    assert.equal(set_text, "");
+    assert.equal(wrap_selection_called, true);
+    assert.equal(wrap_syntax, bold_syntax);
+
+    // Undo bold selected text, syntax not selected
+    reset_state();
+    init_textarea("**abc**", {
+        start: 2,
+        end: 5,
+        text: "abc",
+        length: 7,
+    });
+    compose_ui.format_text(textarea, "bold");
+    assert.equal(set_text, "abc");
+    assert.equal(wrap_selection_called, false);
+
+    // Undo bold selected text, syntax selected
+    reset_state();
+    init_textarea("**abc**", {
+        start: 0,
+        end: 7,
+        text: "**abc**",
+        length: 7,
+    });
+    compose_ui.format_text(textarea, "bold");
+    assert.equal(set_text, "abc");
+    assert.equal(wrap_selection_called, false);
+
+    // Italic selected text
+    reset_state();
+    init_textarea("abc", {
+        start: 0,
+        end: 3,
+        text: "abc",
+        length: 3,
+    });
+    compose_ui.format_text(textarea, "italic");
+    assert.equal(set_text, "");
+    assert.equal(wrap_selection_called, true);
+    assert.equal(wrap_syntax, italic_syntax);
+
+    // Undo italic selected text, syntax not selected
+    reset_state();
+    init_textarea("*abc*", {
+        start: 1,
+        end: 4,
+        text: "abc",
+        length: 3,
+    });
+    compose_ui.format_text(textarea, "italic");
+    assert.equal(set_text, "abc");
+    assert.equal(wrap_selection_called, false);
+
+    // Undo italic selected text, syntax selected
+    reset_state();
+    init_textarea("*abc*", {
+        start: 0,
+        end: 5,
+        text: "*abc*",
+        length: 5,
+    });
+    compose_ui.format_text(textarea, "italic");
+    assert.equal(set_text, "abc");
+    assert.equal(wrap_selection_called, false);
+
+    // Undo bold selected text, text is both italic and bold, syntax not selected.
+    reset_state();
+    init_textarea("***abc***", {
+        start: 3,
+        end: 6,
+        text: "abc",
+        length: 3,
+    });
+    compose_ui.format_text(textarea, "bold");
+    assert.equal(set_text, "*abc*");
+    assert.equal(wrap_selection_called, false);
+
+    // Undo bold selected text, text is both italic and bold, syntax selected.
+    reset_state();
+    init_textarea("***abc***", {
+        start: 0,
+        end: 9,
+        text: "***abc***",
+        length: 9,
+    });
+    compose_ui.format_text(textarea, "bold");
+    assert.equal(set_text, "*abc*");
+    assert.equal(wrap_selection_called, false);
+
+    // Undo italic selected text, text is both italic and bold, syntax not selected.
+    reset_state();
+    init_textarea("***abc***", {
+        start: 3,
+        end: 6,
+        text: "abc",
+        length: 3,
+    });
+    compose_ui.format_text(textarea, "italic");
+    assert.equal(set_text, "**abc**");
+    assert.equal(wrap_selection_called, false);
+
+    // Undo italic selected text, text is both italic and bold, syntax selected.
+    reset_state();
+    init_textarea("***abc***", {
+        start: 0,
+        end: 9,
+        text: "***abc***",
+        length: 9,
+    });
+    compose_ui.format_text(textarea, "italic");
+    assert.equal(set_text, "**abc**");
+    assert.equal(wrap_selection_called, false);
+});
+
 run_test("markdown_shortcuts", ({override}) => {
-    let queryCommandEnabled = true;
+    let format_text_type;
+    override(compose_ui, "format_text", (textarea, type) => {
+        format_text_type = type;
+    });
+
     const event = {
         key: "b",
         target: {
@@ -470,55 +631,8 @@ run_test("markdown_shortcuts", ({override}) => {
         stopPropagation: noop,
         preventDefault: noop,
     };
-    let input_text = "";
-    let range_start = 0;
-    let range_length = 0;
-    let compose_value = $("#compose_textarea").val();
-    let selected_word = "";
-
-    override(document, "queryCommandEnabled", () => queryCommandEnabled);
-
-    override(document, "execCommand", (cmd, bool, markdown) => {
-        const compose_textarea = $("#compose-textarea");
-        const value = compose_textarea.val();
-        $("#compose-textarea").val(
-            value.slice(0, compose_textarea.range().start) +
-                markdown +
-                value.slice(compose_textarea.range().end),
-        );
-    });
-
-    $("#compose-textarea")[0] = {};
-    $("#compose-textarea").range = () => ({
-        start: range_start,
-        end: range_start + range_length,
-        length: range_length,
-        range: noop,
-        text: $("#compose-textarea")
-            .val()
-            .slice(range_start, range_length + range_start),
-    });
-    $("#compose-textarea").caret = noop;
-
-    function test_i_typed(isCtrl, isCmd) {
-        // Test 'i' is typed correctly.
-        $("#compose-textarea").val("i");
-        event.key = "i";
-        event.metaKey = isCmd;
-        event.ctrlKey = isCtrl;
-        compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal("i", $("#compose-textarea").val());
-    }
 
     function all_markdown_test(isCtrl, isCmd) {
-        input_text = "Any text.";
-        $("#compose-textarea").val(input_text);
-        compose_value = $("#compose-textarea").val();
-        // Select "text" word in compose box.
-        selected_word = "text";
-        range_start = compose_value.search(selected_word);
-        range_length = selected_word.length;
-
         // Test bold:
         // Mac env = Cmd+b
         // Windows/Linux = Ctrl+b
@@ -526,45 +640,27 @@ run_test("markdown_shortcuts", ({override}) => {
         event.ctrlKey = isCtrl;
         event.metaKey = isCmd;
         compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal("Any **text**.", $("#compose-textarea").val());
-        // Test if no text is selected.
-        range_start = 0;
-        // Change cursor to first position.
-        range_length = 0;
-        compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal("****Any **text**.", $("#compose-textarea").val());
+        assert.equal(format_text_type, "bold");
+        format_text_type = undefined;
 
         // Test italic:
         // Mac = Cmd+I
         // Windows/Linux = Ctrl+I
         // We use event.key = "I" to emulate user using Caps Lock key.
-        $("#compose-textarea").val(input_text);
-        range_start = compose_value.search(selected_word);
-        range_length = selected_word.length;
         event.key = "I";
         event.shiftKey = false;
         compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal("Any *text*.", $("#compose-textarea").val());
-        // Test if no text is selected.
-        range_length = 0;
-        // Change cursor to first position.
-        range_start = 0;
-        compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal("**Any *text*.", $("#compose-textarea").val());
+        assert.equal(format_text_type, "italic");
+        format_text_type = undefined;
 
         // Test link insertion:
         // Mac = Cmd+Shift+L
         // Windows/Linux = Ctrl+Shift+L
-        $("#compose-textarea").val(input_text);
-        range_start = compose_value.search(selected_word);
-        range_length = selected_word.length;
         event.key = "l";
         event.shiftKey = true;
         compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal("Any [text](url).", $("#compose-textarea").val());
-        // Test if exec command is not enabled in browser.
-        queryCommandEnabled = false;
-        compose_ui.handle_keydown(event, $("#compose-textarea"));
+        assert.equal(format_text_type, "link");
+        format_text_type = undefined;
     }
 
     // This function cross tests the Cmd/Ctrl + Markdown shortcuts in
@@ -572,28 +668,22 @@ run_test("markdown_shortcuts", ({override}) => {
     // that e.g. Cmd+B should be ignored on Linux/Windows and Ctrl+B
     // should be ignored on Mac.
     function os_specific_markdown_test(isCtrl, isCmd) {
-        input_text = "Any text.";
-        $("#compose-textarea").val(input_text);
-        compose_value = $("#compose-textarea").val();
-        selected_word = "text";
-        range_start = compose_value.search(selected_word);
-        range_length = selected_word.length;
-        event.metaKey = isCmd;
         event.ctrlKey = isCtrl;
+        event.metaKey = isCmd;
 
         event.key = "b";
         compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal(input_text, $("#compose-textarea").val());
+        assert.equal(format_text_type, undefined);
 
         event.key = "i";
         event.shiftKey = false;
         compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal(input_text, $("#compose-textarea").val());
+        assert.equal(format_text_type, undefined);
 
         event.key = "l";
         event.shiftKey = true;
         compose_ui.handle_keydown(event, $("#compose-textarea"));
-        assert.equal(input_text, $("#compose-textarea").val());
+        assert.equal(format_text_type, undefined);
     }
 
     // These keyboard shortcuts differ as to what key one should use
@@ -602,7 +692,6 @@ run_test("markdown_shortcuts", ({override}) => {
     // Default (Linux/Windows) userAgent tests:
     navigator.platform = "";
 
-    test_i_typed(false, false);
     // Check all the Ctrl + Markdown shortcuts work correctly
     all_markdown_test(true, false);
     // The Cmd + Markdown shortcuts should do nothing on Linux/Windows
@@ -612,7 +701,6 @@ run_test("markdown_shortcuts", ({override}) => {
     navigator.platform = "MacIntel";
 
     // Mac userAgent tests:
-    test_i_typed(false, false);
     // The Ctrl + Markdown shortcuts should do nothing on mac
     os_specific_markdown_test(true, false);
     // Check all the Cmd + Markdown shortcuts work correctly

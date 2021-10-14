@@ -171,7 +171,14 @@ def resize_gif(im: GifImageFile, size: int = DEFAULT_EMOJI_SIZE) -> bytes:
     return out.getvalue()
 
 
-def resize_emoji(image_data: bytes, size: int = DEFAULT_EMOJI_SIZE) -> bytes:
+def resize_emoji(
+    image_data: bytes, size: int = DEFAULT_EMOJI_SIZE
+) -> Tuple[bytes, bool, Optional[bytes]]:
+    # This function returns three values:
+    # 1) Emoji image data.
+    # 2) If emoji is gif i.e animated.
+    # 3) If is animated then return still image data i.e first frame of gif.
+
     try:
         im = Image.open(io.BytesIO(image_data))
         image_format = im.format
@@ -186,13 +193,29 @@ def resize_emoji(image_data: bytes, size: int = DEFAULT_EMOJI_SIZE) -> bytes:
                 or im.size[0] > MAX_EMOJI_GIF_SIZE  # dimensions too large
                 or len(image_data) > MAX_EMOJI_GIF_FILE_SIZE_BYTES  # filesize too large
             )
-            return resize_gif(im, size) if should_resize else image_data
+
+            # Generate a still image from the first frame.  Since
+            # we're converting the format to PNG anyway, we resize unconditionally.
+            still_image = im.copy()
+            still_image.seek(0)
+            still_image = ImageOps.exif_transpose(still_image)
+            still_image = ImageOps.fit(still_image, (size, size), Image.ANTIALIAS)
+            out = io.BytesIO()
+            still_image.save(out, format="PNG")
+            still_image_data = out.getvalue()
+
+            if should_resize:
+                image_data = resize_gif(im, size)
+
+            return image_data, True, still_image_data
         else:
+            # Note that this is essentially duplicated in the
+            # still_image code path, above.
             im = ImageOps.exif_transpose(im)
             im = ImageOps.fit(im, (size, size), Image.ANTIALIAS)
             out = io.BytesIO()
             im.save(out, format=image_format)
-            return out.getvalue()
+            return out.getvalue(), False, None
     except OSError:
         raise BadImageError(_("Could not decode image; did you upload an image file?"))
     except DecompressionBombError:
@@ -204,6 +227,9 @@ def resize_emoji(image_data: bytes, size: int = DEFAULT_EMOJI_SIZE) -> bytes:
 
 class ZulipUploadBackend:
     def get_public_upload_root_url(self) -> str:
+        raise NotImplementedError()
+
+    def generate_message_upload_path(self, realm_id: str, uploaded_file_name: str) -> str:
         raise NotImplementedError()
 
     def upload_message_file(
@@ -257,10 +283,10 @@ class ZulipUploadBackend:
 
     def upload_emoji_image(
         self, emoji_file: IO[bytes], emoji_file_name: str, user_profile: UserProfile
-    ) -> None:
+    ) -> bool:
         raise NotImplementedError()
 
-    def get_emoji_url(self, emoji_file_name: str, realm_id: int) -> str:
+    def get_emoji_url(self, emoji_file_name: str, realm_id: int, still: bool = False) -> str:
         raise NotImplementedError()
 
     def upload_export_tarball(
@@ -445,6 +471,15 @@ class S3UploadBackend(ZulipUploadBackend):
     def get_public_upload_root_url(self) -> str:
         return self.public_upload_url_base
 
+    def generate_message_upload_path(self, realm_id: str, uploaded_file_name: str) -> str:
+        return "/".join(
+            [
+                realm_id,
+                secrets.token_urlsafe(18),
+                sanitize_name(uploaded_file_name),
+            ]
+        )
+
     def upload_message_file(
         self,
         uploaded_file_name: str,
@@ -456,13 +491,7 @@ class S3UploadBackend(ZulipUploadBackend):
     ) -> str:
         if target_realm is None:
             target_realm = user_profile.realm
-        s3_file_name = "/".join(
-            [
-                str(target_realm.id),
-                secrets.token_urlsafe(18),
-                sanitize_name(uploaded_file_name),
-            ]
-        )
+        s3_file_name = self.generate_message_upload_path(str(target_realm.id), uploaded_file_name)
         url = f"/user_uploads/{s3_file_name}"
 
         upload_image_to_s3(
@@ -658,7 +687,7 @@ class S3UploadBackend(ZulipUploadBackend):
 
     def upload_emoji_image(
         self, emoji_file: IO[bytes], emoji_file_name: str, user_profile: UserProfile
-    ) -> None:
+    ) -> bool:
         content_type = guess_type(emoji_file.name)[0]
         emoji_path = RealmEmoji.PATH_ID_TEMPLATE.format(
             realm_id=user_profile.realm_id,
@@ -666,7 +695,7 @@ class S3UploadBackend(ZulipUploadBackend):
         )
 
         image_data = emoji_file.read()
-        resized_image_data = resize_emoji(image_data)
+        resized_image_data, is_animated, still_image_data = resize_emoji(image_data)
         upload_image_to_s3(
             self.avatar_bucket,
             ".".join((emoji_path, "original")),
@@ -681,12 +710,36 @@ class S3UploadBackend(ZulipUploadBackend):
             user_profile,
             resized_image_data,
         )
+        if is_animated:
+            still_path = RealmEmoji.STILL_PATH_ID_TEMPLATE.format(
+                realm_id=user_profile.realm_id,
+                emoji_filename_without_extension=os.path.splitext(emoji_file_name)[0],
+            )
+            assert still_image_data is not None
+            upload_image_to_s3(
+                self.avatar_bucket,
+                still_path,
+                "image/png",
+                user_profile,
+                still_image_data,
+            )
 
-    def get_emoji_url(self, emoji_file_name: str, realm_id: int) -> str:
-        emoji_path = RealmEmoji.PATH_ID_TEMPLATE.format(
-            realm_id=realm_id, emoji_file_name=emoji_file_name
-        )
-        return self.get_public_upload_url(emoji_path)
+        return is_animated
+
+    def get_emoji_url(self, emoji_file_name: str, realm_id: int, still: bool = False) -> str:
+        if still:
+            # We currently only support animated GIFs.
+            assert emoji_file_name.endswith(".gif")
+            emoji_path = RealmEmoji.STILL_PATH_ID_TEMPLATE.format(
+                realm_id=realm_id,
+                emoji_filename_without_extension=os.path.splitext(emoji_file_name)[0],
+            )
+            return self.get_public_upload_url(emoji_path)
+        else:
+            emoji_path = RealmEmoji.PATH_ID_TEMPLATE.format(
+                realm_id=realm_id, emoji_file_name=emoji_file_name
+            )
+            return self.get_public_upload_url(emoji_path)
 
     def upload_export_tarball(
         self,
@@ -778,6 +831,17 @@ class LocalUploadBackend(ZulipUploadBackend):
     def get_public_upload_root_url(self) -> str:
         return "/user_avatars/"
 
+    def generate_message_upload_path(self, realm_id: str, uploaded_file_name: str) -> str:
+        # Split into 256 subdirectories to prevent directories from getting too big
+        return "/".join(
+            [
+                realm_id,
+                format(random.randint(0, 255), "x"),
+                secrets.token_urlsafe(18),
+                sanitize_name(uploaded_file_name),
+            ]
+        )
+
     def upload_message_file(
         self,
         uploaded_file_name: str,
@@ -787,15 +851,7 @@ class LocalUploadBackend(ZulipUploadBackend):
         user_profile: UserProfile,
         target_realm: Optional[Realm] = None,
     ) -> str:
-        # Split into 256 subdirectories to prevent directories from getting too big
-        path = "/".join(
-            [
-                str(user_profile.realm_id),
-                format(random.randint(0, 255), "x"),
-                secrets.token_urlsafe(18),
-                sanitize_name(uploaded_file_name),
-            ]
-        )
+        path = self.generate_message_upload_path(str(user_profile.realm_id), uploaded_file_name)
 
         logger.info(
             "[zerver/lib/upload.py] uploading file='%s', content-type='%s', user='%s', email='%s', target-realm='%s'"
@@ -913,22 +969,43 @@ class LocalUploadBackend(ZulipUploadBackend):
 
     def upload_emoji_image(
         self, emoji_file: IO[bytes], emoji_file_name: str, user_profile: UserProfile
-    ) -> None:
+    ) -> bool:
         emoji_path = RealmEmoji.PATH_ID_TEMPLATE.format(
             realm_id=user_profile.realm_id,
             emoji_file_name=emoji_file_name,
         )
 
         image_data = emoji_file.read()
-        resized_image_data = resize_emoji(image_data)
+        resized_image_data, is_animated, still_image_data = resize_emoji(image_data)
         write_local_file("avatars", ".".join((emoji_path, "original")), image_data)
         write_local_file("avatars", emoji_path, resized_image_data)
+        if is_animated:
+            assert still_image_data is not None
+            still_path = RealmEmoji.STILL_PATH_ID_TEMPLATE.format(
+                realm_id=user_profile.realm_id,
+                emoji_filename_without_extension=os.path.splitext(emoji_file_name)[0],
+            )
+            write_local_file("avatars", still_path, still_image_data)
+        return is_animated
 
-    def get_emoji_url(self, emoji_file_name: str, realm_id: int) -> str:
-        return os.path.join(
-            "/user_avatars",
-            RealmEmoji.PATH_ID_TEMPLATE.format(realm_id=realm_id, emoji_file_name=emoji_file_name),
-        )
+    def get_emoji_url(self, emoji_file_name: str, realm_id: int, still: bool = False) -> str:
+        if still:
+            # We currently only support animated GIFs.
+            assert emoji_file_name.endswith(".gif")
+            return os.path.join(
+                "/user_avatars",
+                RealmEmoji.STILL_PATH_ID_TEMPLATE.format(
+                    realm_id=realm_id,
+                    emoji_filename_without_extension=os.path.splitext(emoji_file_name)[0],
+                ),
+            )
+        else:
+            return os.path.join(
+                "/user_avatars",
+                RealmEmoji.PATH_ID_TEMPLATE.format(
+                    realm_id=realm_id, emoji_file_name=emoji_file_name
+                ),
+            )
 
     def upload_export_tarball(
         self,
@@ -1005,8 +1082,8 @@ def upload_logo_image(user_file: IO[bytes], user_profile: UserProfile, night: bo
 
 def upload_emoji_image(
     emoji_file: IO[bytes], emoji_file_name: str, user_profile: UserProfile
-) -> None:
-    upload_backend.upload_emoji_image(emoji_file, emoji_file_name, user_profile)
+) -> bool:
+    return upload_backend.upload_emoji_image(emoji_file, emoji_file_name, user_profile)
 
 
 def upload_message_file(

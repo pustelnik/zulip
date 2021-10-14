@@ -262,9 +262,15 @@ EXTERNAL_URI_SCHEME = "https://"
 # Whether anyone can create a new organization on the Zulip server.
 OPEN_REALM_CREATION = False
 
+# Whether it's possible to create web-public streams on this server.
+WEB_PUBLIC_STREAMS_ENABLED = False
+
 # Setting for where the system bot users are.  Likely has no
 # purpose now that the REALMS_HAVE_SUBDOMAINS migration is finished.
 SYSTEM_ONLY_REALMS = {"zulip"}
+
+# Default deadline for demo organizations
+DEMO_ORG_DEADLINE_DAYS = 30
 
 # Alternate hostnames to serve particular realms on, in addition to
 # their usual subdomains.  Keys are realm string_ids (aka subdomains),
@@ -335,8 +341,7 @@ LOGIN_LINK_DISABLED = False
 FIND_TEAM_LINK_DISABLED = True
 
 # What domains to treat like the root domain
-# "auth" is by default a reserved subdomain for the use by python-social-auth.
-ROOT_SUBDOMAIN_ALIASES = ["www", "auth"]
+ROOT_SUBDOMAIN_ALIASES = ["www"]
 # Whether the root domain is a landing page or can host a realm.
 ROOT_DOMAIN_LANDING_PAGE = False
 

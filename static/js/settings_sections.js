@@ -14,6 +14,7 @@ import * as settings_notifications from "./settings_notifications";
 import * as settings_org from "./settings_org";
 import * as settings_playgrounds from "./settings_playgrounds";
 import * as settings_profile_fields from "./settings_profile_fields";
+import * as settings_realm_user_settings_defaults from "./settings_realm_user_settings_defaults";
 import * as settings_streams from "./settings_streams";
 import * as settings_user_groups from "./settings_user_groups";
 import * as settings_users from "./settings_users";
@@ -50,8 +51,12 @@ export function get_group(section) {
 export function initialize() {
     // personal
     load_func_dict.set("your-account", settings_account.set_up);
-    load_func_dict.set("display-settings", settings_display.set_up);
-    load_func_dict.set("notifications", settings_notifications.set_up);
+    load_func_dict.set("display-settings", () => {
+        settings_display.set_up(settings_display.user_settings_panel);
+    });
+    load_func_dict.set("notifications", () => {
+        settings_notifications.set_up(settings_notifications.user_settings_panel);
+    });
     load_func_dict.set("your-bots", settings_bots.set_up);
     load_func_dict.set("alert-words", alert_words_ui.set_up_alert_words);
     load_func_dict.set("uploaded-files", attachments_ui.set_up_attachments);
@@ -70,6 +75,10 @@ export function initialize() {
     load_func_dict.set("user-groups-admin", settings_user_groups.set_up);
     load_func_dict.set("profile-field-settings", settings_profile_fields.set_up);
     load_func_dict.set("data-exports-admin", settings_exports.set_up);
+    load_func_dict.set(
+        "organization-level-user-defaults",
+        settings_realm_user_settings_defaults.set_up,
+    );
 }
 
 export function load_settings_section(section) {

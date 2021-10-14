@@ -10,6 +10,7 @@ from confirmation.models import Confirmation, ConfirmationKeyException, get_obje
 from zerver.decorator import require_realm_admin, require_realm_owner
 from zerver.forms import check_subdomain_available as check_subdomain
 from zerver.lib.actions import (
+    do_change_realm_subdomain,
     do_deactivate_realm,
     do_reactivate_realm,
     do_set_realm_authentication_methods,
@@ -17,9 +18,11 @@ from zerver.lib.actions import (
     do_set_realm_notifications_stream,
     do_set_realm_property,
     do_set_realm_signup_notifications_stream,
+    do_set_realm_user_default_setting,
 )
 from zerver.lib.exceptions import JsonableError, OrganizationOwnerRequired
 from zerver.lib.i18n import get_available_language_codes
+from zerver.lib.message import parse_message_content_delete_limit
 from zerver.lib.request import REQ, has_request_variables
 from zerver.lib.response import json_success
 from zerver.lib.retention import parse_message_retention_days
@@ -30,10 +33,12 @@ from zerver.lib.validator import (
     check_dict,
     check_int,
     check_int_in,
+    check_string_in,
     check_string_or_int,
     to_non_negative_int,
 )
-from zerver.models import Realm, UserProfile
+from zerver.models import Realm, RealmUserDefault, UserProfile
+from zerver.views.user_settings import check_settings_values
 
 
 @require_realm_admin
@@ -63,9 +68,11 @@ def update_realm(
     add_custom_emoji_policy: Optional[int] = REQ(
         json_validator=check_int_in(Realm.COMMON_POLICY_TYPES), default=None
     ),
-    allow_message_deleting: Optional[bool] = REQ(json_validator=check_bool, default=None),
-    message_content_delete_limit_seconds: Optional[int] = REQ(
-        converter=to_non_negative_int, default=None
+    delete_own_message_policy: Optional[int] = REQ(
+        json_validator=check_int_in(Realm.COMMON_MESSAGE_POLICY_TYPES), default=None
+    ),
+    message_content_delete_limit_seconds_raw: Optional[Union[int, str]] = REQ(
+        "message_content_delete_limit_seconds", json_validator=check_string_or_int, default=None
     ),
     allow_message_editing: Optional[bool] = REQ(json_validator=check_bool, default=None),
     edit_topic_policy: Optional[int] = REQ(
@@ -94,8 +101,14 @@ def update_realm(
     bot_creation_policy: Optional[int] = REQ(
         json_validator=check_int_in(Realm.BOT_CREATION_POLICY_TYPES), default=None
     ),
-    create_stream_policy: Optional[int] = REQ(
+    create_public_stream_policy: Optional[int] = REQ(
         json_validator=check_int_in(Realm.COMMON_POLICY_TYPES), default=None
+    ),
+    create_private_stream_policy: Optional[int] = REQ(
+        json_validator=check_int_in(Realm.COMMON_POLICY_TYPES), default=None
+    ),
+    create_web_public_stream_policy: Optional[int] = REQ(
+        json_validator=check_int_in(Realm.CREATE_WEB_PUBLIC_STREAM_POLICY_TYPES), default=None
     ),
     invite_to_stream_policy: Optional[int] = REQ(
         json_validator=check_int_in(Realm.COMMON_POLICY_TYPES), default=None
@@ -115,12 +128,15 @@ def update_realm(
     email_address_visibility: Optional[int] = REQ(
         json_validator=check_int_in(Realm.EMAIL_ADDRESS_VISIBILITY_TYPES), default=None
     ),
-    default_twenty_four_hour_time: Optional[bool] = REQ(json_validator=check_bool, default=None),
     video_chat_provider: Optional[int] = REQ(json_validator=check_int, default=None),
     giphy_rating: Optional[int] = REQ(json_validator=check_int, default=None),
     default_code_block_language: Optional[str] = REQ(default=None),
     digest_weekday: Optional[int] = REQ(
         json_validator=check_int_in(Realm.DIGEST_WEEKDAY_VALUES), default=None
+    ),
+    string_id: Optional[str] = REQ(
+        str_validator=check_capped_string(Realm.MAX_REALM_SUBDOMAIN_LENGTH),
+        default=None,
     ),
 ) -> HttpResponse:
     realm = user_profile.realm
@@ -155,6 +171,22 @@ def update_realm(
     if invite_to_realm_policy is not None and not user_profile.is_realm_owner:
         raise OrganizationOwnerRequired()
 
+    data: Dict[str, Any] = {}
+
+    message_content_delete_limit_seconds: Optional[int] = None
+    if message_content_delete_limit_seconds_raw is not None:
+        message_content_delete_limit_seconds = parse_message_content_delete_limit(
+            message_content_delete_limit_seconds_raw,
+            Realm.MESSAGE_CONTENT_DELETE_LIMIT_SPECIAL_VALUES_MAP,
+        )
+        do_set_realm_property(
+            realm,
+            "message_content_delete_limit_seconds",
+            message_content_delete_limit_seconds,
+            acting_user=user_profile,
+        )
+        data["message_content_delete_limit_seconds"] = message_content_delete_limit_seconds
+
     # The user of `locals()` here is a bit of a code smell, but it's
     # restricted to the elements present in realm.property_types.
     #
@@ -162,7 +194,6 @@ def update_realm(
     # further by some more advanced usage of the
     # `REQ/has_request_variables` extraction.
     req_vars = {k: v for k, v in list(locals().items()) if k in realm.property_types}
-    data: Dict[str, Any] = {}
 
     for k, v in list(req_vars.items()):
         if v is not None and getattr(realm, k) != v:
@@ -247,6 +278,21 @@ def update_realm(
         else:
             data["default_code_block_language"] = default_code_block_language
 
+    if string_id is not None:
+        if not user_profile.is_realm_owner:
+            raise OrganizationOwnerRequired()
+
+        if realm.demo_organization_scheduled_deletion_date is None:
+            raise JsonableError(_("Must be a demo organization."))
+
+        try:
+            check_subdomain(string_id)
+        except ValidationError as err:
+            raise JsonableError(str(err.message))
+
+        do_change_realm_subdomain(realm, string_id, acting_user=user_profile)
+        data["realm_uri"] = realm.uri
+
     return json_success(data)
 
 
@@ -275,3 +321,107 @@ def realm_reactivation(request: HttpRequest, confirmation_key: str) -> HttpRespo
     do_reactivate_realm(realm)
     context = {"realm": realm}
     return render(request, "zerver/realm_reactivation.html", context)
+
+
+emojiset_choices = {emojiset["key"] for emojiset in RealmUserDefault.emojiset_choices()}
+default_view_options = ["recent_topics", "all_messages"]
+
+
+@require_realm_admin
+@has_request_variables
+def update_realm_user_settings_defaults(
+    request: HttpRequest,
+    user_profile: UserProfile,
+    dense_mode: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    starred_message_counts: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    fluid_layout_width: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    high_contrast_mode: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    color_scheme: Optional[int] = REQ(
+        json_validator=check_int_in(UserProfile.COLOR_SCHEME_CHOICES), default=None
+    ),
+    translate_emoticons: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    default_view: Optional[str] = REQ(
+        str_validator=check_string_in(default_view_options), default=None
+    ),
+    left_side_userlist: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    emojiset: Optional[str] = REQ(str_validator=check_string_in(emojiset_choices), default=None),
+    demote_inactive_streams: Optional[int] = REQ(
+        json_validator=check_int_in(UserProfile.DEMOTE_STREAMS_CHOICES), default=None
+    ),
+    enable_stream_desktop_notifications: Optional[bool] = REQ(
+        json_validator=check_bool, default=None
+    ),
+    enable_stream_email_notifications: Optional[bool] = REQ(
+        json_validator=check_bool, default=None
+    ),
+    enable_stream_push_notifications: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    enable_stream_audible_notifications: Optional[bool] = REQ(
+        json_validator=check_bool, default=None
+    ),
+    wildcard_mentions_notify: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    notification_sound: Optional[str] = REQ(default=None),
+    enable_desktop_notifications: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    enable_sounds: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    enable_offline_email_notifications: Optional[bool] = REQ(
+        json_validator=check_bool, default=None
+    ),
+    enable_offline_push_notifications: Optional[bool] = REQ(
+        json_validator=check_bool, default=None
+    ),
+    enable_online_push_notifications: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    enable_digest_emails: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    # enable_login_emails is not included here, because we don't want
+    # security-related settings to be controlled by organization administrators.
+    # enable_marketing_emails is not included here, since we don't at
+    # present allow organizations to customize this. (The user's selection
+    # in the signup form takes precedence over RealmUserDefault).
+    #
+    # We may want to change this model in the future, since some SSO signups
+    # do not offer an opportunity to prompt the user at all during signup.
+    message_content_in_email_notifications: Optional[bool] = REQ(
+        json_validator=check_bool, default=None
+    ),
+    pm_content_in_desktop_notifications: Optional[bool] = REQ(
+        json_validator=check_bool, default=None
+    ),
+    desktop_icon_count_display: Optional[int] = REQ(
+        json_validator=check_int_in(UserProfile.DESKTOP_ICON_COUNT_DISPLAY_CHOICES), default=None
+    ),
+    realm_name_in_notifications: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    presence_enabled: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    enter_sends: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    enable_drafts_synchronization: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    email_notifications_batching_period_seconds: Optional[int] = REQ(
+        json_validator=check_int, default=None
+    ),
+    twenty_four_hour_time: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    send_stream_typing_notifications: Optional[bool] = REQ(json_validator=check_bool, default=None),
+    send_private_typing_notifications: Optional[bool] = REQ(
+        json_validator=check_bool, default=None
+    ),
+    send_read_receipts: Optional[bool] = REQ(json_validator=check_bool, default=None),
+) -> HttpResponse:
+    if notification_sound is not None or email_notifications_batching_period_seconds is not None:
+        check_settings_values(notification_sound, email_notifications_batching_period_seconds)
+
+    realm_user_default = RealmUserDefault.objects.get(realm=user_profile.realm)
+    request_settings = {
+        k: v for k, v in list(locals().items()) if (k in RealmUserDefault.property_types)
+    }
+    for k, v in list(request_settings.items()):
+        if v is not None and getattr(realm_user_default, k) != v:
+            do_set_realm_user_default_setting(realm_user_default, k, v, acting_user=user_profile)
+
+    # TODO: Extract `ignored_parameters_unsupported` to be a common feature of the REQ framework.
+    from zerver.lib.request import RequestNotes
+
+    request_notes = RequestNotes.get_notes(request)
+    for req_var in request.POST:
+        if req_var not in request_notes.processed_parameters:
+            request_notes.ignored_parameters.add(req_var)
+
+    result: Dict[str, Any] = {}
+    if len(request_notes.ignored_parameters) > 0:
+        result["ignored_parameters_unsupported"] = list(request_notes.ignored_parameters)
+
+    return json_success(result)

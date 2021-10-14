@@ -6,6 +6,7 @@ import render_settings_organization_settings_tip from "../templates/settings/org
 import {$t, language_list} from "./i18n";
 import * as overlays from "./overlays";
 import {page_params} from "./page_params";
+import {realm_user_settings_defaults} from "./realm_user_settings_defaults";
 import * as settings from "./settings";
 import * as settings_bots from "./settings_bots";
 import * as settings_config from "./settings_config";
@@ -23,7 +24,6 @@ const admin_settings_label = {
     realm_signup_notifications_stream: $t({defaultMessage: "New user notifications:"}),
     realm_inline_image_preview: $t({defaultMessage: "Show previews of uploaded and linked images"}),
     realm_inline_url_embed_preview: $t({defaultMessage: "Show previews of linked websites"}),
-    realm_default_twenty_four_hour_time: $t({defaultMessage: "Time format"}),
     realm_send_welcome_emails: $t({defaultMessage: "Send emails introducing Zulip to new users"}),
     realm_message_content_allowed_in_email_notifications: $t({
         defaultMessage: "Allow message content in message notification emails",
@@ -57,6 +57,22 @@ function insert_tip_box() {
         .prepend(tip_box);
 }
 
+function get_realm_level_notification_settings(options) {
+    const all_notifications_settings = settings_config.all_notifications(
+        realm_user_settings_defaults,
+    );
+
+    // We remove enable_marketing_emails and enable_login_emails
+    // setting from all_notification_settings, since there are no
+    // realm-level defaults for these setting.
+    all_notifications_settings.settings.other_email_settings = ["enable_digest_emails"];
+
+    options.general_settings = all_notifications_settings.general_settings;
+    options.notification_settings = all_notifications_settings.settings;
+    options.show_push_notifications_tooltip =
+        all_notifications_settings.show_push_notifications_tooltip;
+}
+
 export function build_page() {
     const options = {
         custom_profile_field_types: page_params.custom_profile_field_types,
@@ -69,7 +85,6 @@ export function build_page() {
         server_inline_image_preview: page_params.server_inline_image_preview,
         realm_inline_url_embed_preview: page_params.realm_inline_url_embed_preview,
         server_inline_url_embed_preview: page_params.server_inline_url_embed_preview,
-        realm_default_twenty_four_hour_time_values: settings_config.twenty_four_hour_time_values,
         realm_authentication_methods: page_params.realm_authentication_methods,
         realm_user_group_edit_policy: page_params.realm_user_group_edit_policy,
         realm_name_changes_disabled: page_params.realm_name_changes_disabled,
@@ -122,7 +137,23 @@ export function build_page() {
         realm_invite_required: page_params.realm_invite_required,
         can_edit_user_groups: settings_data.user_can_edit_user_groups(),
         policy_values: settings_config.common_policy_values,
+        realm_delete_own_message_policy: page_params.realm_delete_own_message_policy,
+        DELETE_OWN_MESSAGE_POLICY_ADMINS_ONLY:
+            settings_config.common_message_policy_values.by_admins_only.code,
         ...settings_org.get_organization_settings_options(),
+        demote_inactive_streams_values: settings_config.demote_inactive_streams_values,
+        color_scheme_values: settings_config.color_scheme_values,
+        default_view_values: settings_config.default_view_values,
+        settings_object: realm_user_settings_defaults,
+        display_settings: settings_config.get_all_display_settings(),
+        settings_label: settings_config.realm_user_settings_defaults_labels,
+        desktop_icon_count_display_values: settings_config.desktop_icon_count_display_values,
+        enable_sound_select:
+            realm_user_settings_defaults.enable_sounds ||
+            realm_user_settings_defaults.enable_stream_audible_notifications,
+        email_notifications_batching_period_values:
+            settings_config.email_notifications_batching_period_values,
+        twenty_four_hour_time_values: settings_config.twenty_four_hour_time_values,
     };
 
     if (options.realm_logo_source !== "D" && options.realm_night_logo_source === "D") {
@@ -137,6 +168,8 @@ export function build_page() {
             "https://zulip.readthedocs.io/en/latest/production/giphy-gif-integration.html";
     }
 
+    get_realm_level_notification_settings(options);
+
     const rendered_admin_tab = render_admin_tab(options);
     $("#settings_content .organization-box").html(rendered_admin_tab);
     $("#settings_content .alert").removeClass("show");
@@ -149,13 +182,6 @@ export function build_page() {
 
     $("#id_realm_default_language").val(page_params.realm_default_language);
     $("#id_realm_digest_weekday").val(options.realm_digest_weekday);
-
-    // default_twenty_four_hour time is a boolean in the API but a
-    // dropdown, so we need to convert the value to a string for
-    // storage in the browser's DOM.
-    $("#id_realm_default_twenty_four_hour_time").val(
-        JSON.stringify(page_params.realm_default_twenty_four_hour_time),
-    );
 }
 
 export function launch(section) {

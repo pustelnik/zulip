@@ -112,6 +112,7 @@ def run() -> None:
         ["yaml"],
         description="Validates our OpenAPI/Swagger API documentation "
         "(zerver/openapi/zulip.yaml) ",
+        fix_arg="--fix",
     )
     linter_config.external_linter(
         "shellcheck",
@@ -166,7 +167,7 @@ def run() -> None:
     linter_config.external_linter(
         "prettier",
         ["node_modules/.bin/prettier", "--check", "--loglevel=warn"],
-        ["css", "flow", "js", "json", "ts", "yaml", "yml"],
+        ["css", "flow", "js", "json", "md", "ts", "yaml", "yml"],
         fix_arg=["--write"],
         description="Formats CSS, JavaScript, YAML",
     )
@@ -186,15 +187,6 @@ def run() -> None:
         "--error",
         "--disable-version-check",
         "--quiet",
-        # This option is dangerous in the context of running
-        # semgrep-as-a-service on untrusted user code, since it
-        # causes Python code in the rules configuration to be
-        # executed.  From our standpoint, it is required for
-        # `pattern-where-python` rules, and there's no real
-        # security impact, since if you can put arbitrary code
-        # into zulip.git, you can run arbitrary code in a Zulip
-        # development environment anyway.
-        "--dangerously-allow-arbitrary-code-execution-from-rules",
     ]
     linter_config.external_linter(
         "semgrep-py",

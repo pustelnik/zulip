@@ -2,7 +2,7 @@
 
 Emoji reactions allow you to react to messages with fun little emoji. Any
 emoji can be used as a reaction, including
-[custom emoji](/help/add-custom-emoji). Reactions appear in little boxes
+[custom emoji](/help/custom-emoji). Reactions appear in little boxes
 underneath the message.
 
 ## Add a reaction
@@ -14,6 +14,7 @@ underneath the message.
 1. Click the smiley face (<i class="fa fa-smile-o"></i>) icon.
 
     !!! warn ""
+
         For messages that you've sent, click the ellipsis
         (<i class="zulip-icon zulip-icon-ellipsis-v-solid"></i>) and then
         **Add emoji reaction**.
@@ -40,6 +41,6 @@ added to remove it.
 
 ## Related articles
 
-* [Add custom emoji](/help/add-custom-emoji)
+* [Add custom emoji](/help/custom-emoji)
 * [View emoji reactions as text](/help/view-emoji-as-text)
 * [Emoji in messages](/help/emoji-and-emoticons)

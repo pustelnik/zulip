@@ -1,4 +1,5 @@
 import calendar
+import datetime
 import urllib
 from datetime import timedelta
 from typing import Any
@@ -49,7 +50,10 @@ class HomeTest(ZulipTestCase):
         "avatar_url",
         "avatar_url_medium",
         "bot_types",
+        "can_create_private_streams",
+        "can_create_public_streams",
         "can_create_streams",
+        "can_create_web_public_streams",
         "can_invite_others_to_realm",
         "can_subscribe_other_users",
         "corporate_enabled",
@@ -103,7 +107,6 @@ class HomeTest(ZulipTestCase):
         "queue_id",
         "realm_add_custom_emoji_policy",
         "realm_allow_edit_history",
-        "realm_allow_message_deleting",
         "realm_allow_message_editing",
         "realm_authentication_methods",
         "realm_available_video_chat_providers",
@@ -112,13 +115,15 @@ class HomeTest(ZulipTestCase):
         "realm_bot_domain",
         "realm_bots",
         "realm_community_topic_editing_limit_seconds",
-        "realm_create_stream_policy",
+        "realm_create_private_stream_policy",
+        "realm_create_public_stream_policy",
+        "realm_create_web_public_stream_policy",
         "realm_default_code_block_language",
         "realm_default_external_accounts",
         "realm_default_language",
         "realm_default_stream_groups",
         "realm_default_streams",
-        "realm_default_twenty_four_hour_time",
+        "realm_delete_own_message_policy",
         "realm_description",
         "realm_digest_emails_enabled",
         "realm_digest_weekday",
@@ -169,6 +174,7 @@ class HomeTest(ZulipTestCase):
         "realm_uri",
         "realm_user_group_edit_policy",
         "realm_user_groups",
+        "realm_user_settings_defaults",
         "realm_users",
         "realm_video_chat_provider",
         "realm_waiting_period_threshold",
@@ -237,7 +243,7 @@ class HomeTest(ZulipTestCase):
             set(result["Cache-Control"].split(", ")), {"must-revalidate", "no-store", "no-cache"}
         )
 
-        self.assert_length(queries, 43)
+        self.assert_length(queries, 44)
         self.assert_length(cache_mock.call_args_list, 5)
 
         html = result.content.decode()
@@ -272,7 +278,46 @@ class HomeTest(ZulipTestCase):
         realm_bots_actual_keys = sorted(str(key) for key in page_params["realm_bots"][0].keys())
         self.assertEqual(realm_bots_actual_keys, realm_bots_expected_keys)
 
+    def test_home_demo_organization(self) -> None:
+        realm = get_realm("zulip")
+
+        # We construct a scheduled deletion date that's definitely in
+        # the future, regardless of how long ago the Zulip realm was
+        # created.
+        realm.demo_organization_scheduled_deletion_date = timezone_now() + datetime.timedelta(
+            days=1
+        )
+        realm.save()
+        self.login("hamlet")
+
+        # Verify succeeds once logged-in
+        flush_per_request_caches()
+        with queries_captured():
+            with patch("zerver.lib.cache.cache_set"):
+                result = self._get_home_page(stream="Denmark")
+                self.check_rendered_logged_in_app(result)
+
+        page_params = self._get_page_params(result)
+        actual_keys = sorted(str(k) for k in page_params.keys())
+        expected_keys = self.expected_page_params_keys + [
+            "demo_organization_scheduled_deletion_date"
+        ]
+
+        self.assertEqual(set(actual_keys), set(expected_keys))
+
     def test_logged_out_home(self) -> None:
+        # Redirect to login on first request.
+        result = self.client_get("/")
+        self.assertEqual(result.status_code, 302)
+        self.assertEqual(result.url, "/login/")
+
+        # Tell server that user wants to login anonymously
+        # Redirects to load webapp.
+        result = self.client_post("/", {"prefers_web_public_view": "true"})
+        self.assertEqual(result.status_code, 302)
+        self.assertEqual(result.url, "http://zulip.testserver")
+
+        # Always load the web app from then on directly
         result = self.client_get("/")
         self.assertEqual(result.status_code, 200)
 
@@ -317,7 +362,7 @@ class HomeTest(ZulipTestCase):
                 result = self._get_home_page()
                 self.check_rendered_logged_in_app(result)
                 self.assert_length(cache_mock.call_args_list, 6)
-            self.assert_length(queries, 40)
+            self.assert_length(queries, 41)
 
     def test_num_queries_with_streams(self) -> None:
         main_user = self.example_user("hamlet")
@@ -348,7 +393,7 @@ class HomeTest(ZulipTestCase):
         with queries_captured() as queries2:
             result = self._get_home_page()
 
-        self.assert_length(queries2, 38)
+        self.assert_length(queries2, 39)
 
         # Do a sanity check that our new streams were in the payload.
         html = result.content.decode()

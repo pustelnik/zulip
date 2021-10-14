@@ -7,7 +7,11 @@ const {make_stub} = require("../zjsunit/stub");
 const {run_test} = require("../zjsunit/test");
 const blueslip = require("../zjsunit/zblueslip");
 const $ = require("../zjsunit/zjquery");
-const {page_params, user_settings} = require("../zjsunit/zpage_params");
+const {
+    page_params,
+    realm_user_settings_defaults,
+    user_settings,
+} = require("../zjsunit/zpage_params");
 
 const noop = () => {};
 
@@ -54,6 +58,9 @@ const settings_playgrounds = mock_esm("../../static/js/settings_playgrounds");
 const settings_notifications = mock_esm("../../static/js/settings_notifications");
 const settings_org = mock_esm("../../static/js/settings_org");
 const settings_profile_fields = mock_esm("../../static/js/settings_profile_fields");
+const settings_realm_user_settings_defaults = mock_esm(
+    "../../static/js/settings_realm_user_settings_defaults",
+);
 const settings_streams = mock_esm("../../static/js/settings_streams");
 const settings_user_groups = mock_esm("../../static/js/settings_user_groups");
 const settings_users = mock_esm("../../static/js/settings_users");
@@ -340,8 +347,11 @@ run_test("realm settings", ({override}) => {
         assert.equal(page_params[parameter_name], 1);
     }
 
-    let event = event_fixtures.realm__update__create_stream_policy;
-    test_realm_integer(event, "realm_create_stream_policy");
+    let event = event_fixtures.realm__update__create_private_stream_policy;
+    test_realm_integer(event, "realm_create_private_stream_policy");
+
+    event = event_fixtures.realm__update__create_public_stream_policy;
+    test_realm_integer(event, "realm_create_public_stream_policy");
 
     event = event_fixtures.realm__update__invite_to_stream_policy;
     test_realm_integer(event, "realm_invite_to_stream_policy");
@@ -368,9 +378,6 @@ run_test("realm settings", ({override}) => {
 
     event = event_fixtures.realm__update__disallow_disposable_email_addresses;
     test_realm_boolean(event, "realm_disallow_disposable_email_addresses");
-
-    event = event_fixtures.realm__update__default_twenty_four_hour_time;
-    test_realm_boolean(event, "realm_default_twenty_four_hour_time");
 
     event = event_fixtures.realm__update__email_addresses_visibility;
     dispatch(event);
@@ -511,7 +518,7 @@ run_test("realm_emoji", ({override}) => {
     dispatch(event);
 
     // Now emoji.js knows about the spain emoji.
-    assert_same(emoji.get_realm_emoji_url("spain"), "/some/path/to/spain.png");
+    assert_same(emoji.get_realm_emoji_url("spain"), "/some/path/to/spain.gif");
 
     // Make sure our UI modules all got dispatched the same simple way.
     for (const stub of ui_stubs) {
@@ -798,6 +805,11 @@ run_test("user_settings", ({override}) => {
     dispatch(event);
     assert_same(user_settings.enter_sends, true);
 
+    event = event_fixtures.user_settings__presence_enabled;
+    user_settings.presence_enabled = true;
+    dispatch(event);
+    assert_same(user_settings.presence_enabled, false);
+
     {
         event = event_fixtures.user_settings__enable_stream_audible_notifications;
         const stub = make_stub();
@@ -984,4 +996,22 @@ run_test("server_event_dispatch_op_errors", ({override}) => {
     override(settings_user_groups, "reload", noop);
     blueslip.expect("error", "Unexpected event type user_group/other");
     server_events_dispatch.dispatch_normal_event({type: "user_group", op: "other"});
+});
+
+run_test("realm_user_settings_defaults", ({override}) => {
+    let event = event_fixtures.realm_user_settings_defaults__emojiset;
+    realm_user_settings_defaults.emojiset = "text";
+    override(settings_realm_user_settings_defaults, "update_page", noop);
+    dispatch(event);
+    assert_same(realm_user_settings_defaults.emojiset, "google");
+
+    event = event_fixtures.realm_user_settings_defaults__notification_sound;
+    realm_user_settings_defaults.notification_sound = "zulip";
+    let called = false;
+    notifications.update_notification_sound_source = () => {
+        called = true;
+    };
+    dispatch(event);
+    assert_same(realm_user_settings_defaults.notification_sound, "ding");
+    assert_same(called, true);
 });

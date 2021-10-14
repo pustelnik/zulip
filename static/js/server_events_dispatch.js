@@ -36,6 +36,7 @@ import * as reactions from "./reactions";
 import * as realm_icon from "./realm_icon";
 import * as realm_logo from "./realm_logo";
 import * as realm_playground from "./realm_playground";
+import {realm_user_settings_defaults} from "./realm_user_settings_defaults";
 import * as reload from "./reload";
 import * as scroll_bar from "./scroll_bar";
 import * as settings_account from "./settings_account";
@@ -50,6 +51,7 @@ import * as settings_notifications from "./settings_notifications";
 import * as settings_org from "./settings_org";
 import * as settings_playgrounds from "./settings_playgrounds";
 import * as settings_profile_fields from "./settings_profile_fields";
+import * as settings_realm_user_settings_defaults from "./settings_realm_user_settings_defaults";
 import * as settings_streams from "./settings_streams";
 import * as settings_user_groups from "./settings_user_groups";
 import * as settings_users from "./settings_users";
@@ -181,17 +183,17 @@ export function dispatch_normal_event(event) {
             const realm_settings = {
                 add_custom_emoji_policy: settings_emoji.update_custom_emoji_ui,
                 allow_edit_history: noop,
-                allow_message_deleting: noop,
                 allow_message_editing: noop,
                 edit_topic_policy: noop,
                 user_group_edit_policy: noop,
                 avatar_changes_disabled: settings_account.update_avatar_change_display,
                 bot_creation_policy: settings_bots.update_bot_permissions_ui,
-                create_stream_policy: noop,
+                create_public_stream_policy: noop,
+                create_private_stream_policy: noop,
                 invite_to_stream_policy: noop,
                 default_code_block_language: noop,
                 default_language: noop,
-                default_twenty_four_hour_time: noop,
+                delete_own_message_policy: noop,
                 description: noop,
                 digest_emails_enabled: noop,
                 digest_weekday: noop,
@@ -381,6 +383,19 @@ export function dispatch_normal_event(event) {
             }
             break;
 
+        case "realm_user_settings_defaults": {
+            realm_user_settings_defaults[event.property] = event.value;
+            settings_realm_user_settings_defaults.update_page(event.property);
+
+            if (event.property === "notification_sound") {
+                notifications.update_notification_sound_source(
+                    $("#realm-default-notification-sound-audio"),
+                    realm_user_settings_defaults,
+                );
+            }
+            break;
+        }
+
         case "realm_user":
             switch (event.op) {
                 case "add":
@@ -406,6 +421,7 @@ export function dispatch_normal_event(event) {
                     stream_events.update_property(event.stream_id, event.property, event.value, {
                         rendered_description: event.rendered_description,
                         history_public_to_subscribers: event.history_public_to_subscribers,
+                        is_web_public: event.is_web_public,
                     });
                     settings_streams.update_default_streams_table();
                     break;
@@ -545,7 +561,7 @@ export function dispatch_normal_event(event) {
         case "user_settings": {
             if (settings_config.all_notification_settings.includes(event.property)) {
                 notifications.handle_global_notification_updates(event.property, event.value);
-                settings_notifications.update_page();
+                settings_notifications.update_page(settings_notifications.user_settings_panel);
                 // TODO: This should also do a refresh of the stream_edit UI
                 // if it's currently displayed, possibly reusing some code
                 // from stream_events.js
@@ -567,7 +583,11 @@ export function dispatch_normal_event(event) {
                 "twenty_four_hour_time",
                 "translate_emoticons",
                 "starred_message_counts",
+                "send_stream_typing_notifications",
+                "send_private_typing_notifications",
+                "send_read_receipts",
             ];
+
             if (user_display_settings.includes(event.property)) {
                 user_settings[event.property] = event.value;
             }
@@ -632,7 +652,7 @@ export function dispatch_normal_event(event) {
                 // reload.
             }
             if (event.property === "emojiset") {
-                settings_display.report_emojiset_change();
+                settings_display.report_emojiset_change(settings_display.user_settings_panel);
 
                 // Rerender the whole message list UI
                 message_lists.home.rerender();
@@ -648,7 +668,12 @@ export function dispatch_normal_event(event) {
                 compose.toggle_enter_sends_ui();
                 break;
             }
-            settings_display.update_page();
+            if (event.property === "presence_enabled") {
+                user_settings.presence_enabled = event.value;
+                $("#user_presence_enabled").prop("checked", user_settings.presence_enabled);
+                break;
+            }
+            settings_display.update_page(settings_display.user_settings_panel);
             break;
         }
 

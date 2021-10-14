@@ -2,7 +2,7 @@ import base64
 import os
 import re
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from unittest import mock, skipUnless
 
 import orjson
@@ -29,6 +29,7 @@ from zerver.decorator import (
 from zerver.forms import OurAuthenticationForm
 from zerver.lib.actions import (
     change_user_is_active,
+    do_create_realm,
     do_deactivate_realm,
     do_deactivate_user,
     do_reactivate_realm,
@@ -47,9 +48,9 @@ from zerver.lib.initial_password import initial_password
 from zerver.lib.request import (
     REQ,
     RequestConfusingParmsError,
+    RequestNotes,
     RequestVariableConversionError,
     RequestVariableMissingError,
-    get_request_notes,
     has_request_variables,
 )
 from zerver.lib.response import json_response, json_success
@@ -1218,8 +1219,10 @@ class InactiveUserTest(ZulipTestCase):
         user_profile = self.example_user("hamlet")
         do_deactivate_user(user_profile, acting_user=None)
 
-        result = self.login_with_return(self.example_email("hamlet"))
-        self.assert_in_response("Your account is no longer active.", result)
+        result = self.login_with_return(user_profile.delivery_email)
+        self.assert_in_response(
+            f"Your account {user_profile.delivery_email} has been deactivated.", result
+        )
 
     def test_login_deactivated_mirror_dummy(self) -> None:
         """
@@ -1260,7 +1263,10 @@ class InactiveUserTest(ZulipTestCase):
         form = OurAuthenticationForm(request, payload)
         with self.settings(AUTHENTICATION_BACKENDS=("zproject.backends.EmailAuthBackend",)):
             self.assertFalse(form.is_valid())
-            self.assertIn("Your account is no longer active", str(form.errors))
+            self.assertIn(
+                f"Your account {user_profile.delivery_email} has been deactivated",
+                str(form.errors),
+            )
 
     def test_webhook_deactivated_user(self) -> None:
         """
@@ -1428,19 +1434,19 @@ class TestInternalNotifyView(ZulipTestCase):
                 orjson.loads(self.internal_notify(False, request).content).get("msg"),
                 self.BORING_RESULT,
             )
-            self.assertEqual(get_request_notes(request).requestor_for_logs, "internal")
+            self.assertEqual(RequestNotes.get_notes(request).requestor_for_logs, "internal")
 
             with self.assertRaises(RuntimeError):
                 self.internal_notify(True, request)
 
-        get_request_notes(request).tornado_handler = DummyHandler()
+        RequestNotes.get_notes(request).tornado_handler = DummyHandler()
         with self.settings(SHARED_SECRET=secret):
             self.assertTrue(authenticate_notify(request))
             self.assertEqual(
                 orjson.loads(self.internal_notify(True, request).content).get("msg"),
                 self.BORING_RESULT,
             )
-            self.assertEqual(get_request_notes(request).requestor_for_logs, "internal")
+            self.assertEqual(RequestNotes.get_notes(request).requestor_for_logs, "internal")
 
             with self.assertRaises(RuntimeError):
                 self.internal_notify(False, request)
@@ -2056,3 +2062,47 @@ class TestIgnoreUnhashableLRUCache(ZulipTestCase):
         self.assertEqual(hits, 0)
         self.assertEqual(misses, 0)
         self.assertEqual(currsize, 0)
+
+
+class TestRequestNotes(ZulipTestCase):
+    def test_request_notes_realm(self) -> None:
+        """
+        This test verifies that .realm gets set correctly on the request notes
+        depending on the subdomain.
+        """
+
+        def mock_home(expected_realm: Optional[Realm]) -> Callable[[HttpRequest], HttpResponse]:
+            def inner(request: HttpRequest) -> HttpResponse:
+                self.assertEqual(RequestNotes.get_notes(request).realm, expected_realm)
+                return HttpResponse()
+
+            return inner
+
+        zulip_realm = get_realm("zulip")
+        with mock.patch("zerver.views.home.home_real", new=mock_home(zulip_realm)):
+            result = self.client_get("/", subdomain="zulip")
+            self.assertEqual(result.status_code, 200)
+
+        # When a request is made to the root subdomain and there is no realm on it,
+        # no realm can be set on the request notes.
+        with mock.patch("zerver.views.home.home_real", new=mock_home(None)):
+            result = self.client_get("/", subdomain="")
+            self.assertEqual(result.status_code, 200)
+
+        root_subdomain_realm = do_create_realm("", "Root Domain")
+        # Now test that that realm does get set, if it exists, for requests
+        # to the root subdomain.
+        with mock.patch("zerver.views.home.home_real", new=mock_home(root_subdomain_realm)):
+            result = self.client_get("/", subdomain="")
+            self.assertEqual(result.status_code, 200)
+
+        # Only the root subdomain allows requests to it without having a realm.
+        # Requests to non-root subdomains get stopped by the middleware and
+        # an error page is returned before the request hits the view.
+        with mock.patch("zerver.views.home.home_real") as mock_home_real:
+            result = self.client_get("/", subdomain="invalid")
+            self.assertEqual(result.status_code, 404)
+            self.assert_in_response(
+                "There is no Zulip organization hosted at this subdomain.", result
+            )
+            mock_home_real.assert_not_called()

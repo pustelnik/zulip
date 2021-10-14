@@ -39,16 +39,16 @@ from zerver.lib.actions import (
     do_change_full_name,
     do_change_icon_source,
     do_change_logo_source,
-    do_change_notification_settings,
     do_change_plan_type,
     do_change_realm_domain,
     do_change_stream_description,
-    do_change_stream_invite_only,
     do_change_stream_message_retention_days,
+    do_change_stream_permission,
     do_change_stream_post_policy,
     do_change_subscription_property,
     do_change_user_delivery_email,
     do_change_user_role,
+    do_change_user_setting,
     do_create_default_stream_group,
     do_create_multiuse_invite_link,
     do_create_user,
@@ -82,7 +82,7 @@ from zerver.lib.actions import (
     do_set_realm_notifications_stream,
     do_set_realm_property,
     do_set_realm_signup_notifications_stream,
-    do_set_user_display_setting,
+    do_set_realm_user_default_setting,
     do_set_zoom_token,
     do_unmute_topic,
     do_unmute_user,
@@ -126,6 +126,7 @@ from zerver.lib.event_schema import (
     check_realm_bot_remove,
     check_realm_bot_update,
     check_realm_deactivated,
+    check_realm_default_update,
     check_realm_domains_add,
     check_realm_domains_change,
     check_realm_domains_remove,
@@ -192,6 +193,7 @@ from zerver.models import (
     RealmAuditLog,
     RealmDomain,
     RealmPlayground,
+    RealmUserDefault,
     Service,
     Stream,
     UserGroup,
@@ -646,8 +648,15 @@ class NormalActionsTest(BaseAction):
         streams = []
         for stream_name in ["Denmark", "Scotland"]:
             streams.append(get_stream(stream_name, self.user_profile.realm))
+
+        invite_expires_in_days = 2
         events = self.verify_action(
-            lambda: do_invite_users(self.user_profile, ["foo@zulip.com"], streams, False),
+            lambda: do_invite_users(
+                self.user_profile,
+                ["foo@zulip.com"],
+                streams,
+                invite_expires_in_days=invite_expires_in_days,
+            ),
             state_change_expected=False,
         )
         check_invites_changed("events[0]", events[0])
@@ -658,9 +667,13 @@ class NormalActionsTest(BaseAction):
         for stream_name in ["Denmark", "Verona"]:
             streams.append(get_stream(stream_name, self.user_profile.realm))
 
+        invite_expires_in_days = 2
         events = self.verify_action(
             lambda: do_create_multiuse_invite_link(
-                self.user_profile, PreregistrationUser.INVITE_AS["MEMBER"], streams
+                self.user_profile,
+                PreregistrationUser.INVITE_AS["MEMBER"],
+                invite_expires_in_days,
+                streams,
             ),
             state_change_expected=False,
         )
@@ -671,7 +684,14 @@ class NormalActionsTest(BaseAction):
         streams = []
         for stream_name in ["Denmark", "Verona"]:
             streams.append(get_stream(stream_name, self.user_profile.realm))
-        do_invite_users(self.user_profile, ["foo@zulip.com"], streams, False)
+
+        invite_expires_in_days = 2
+        do_invite_users(
+            self.user_profile,
+            ["foo@zulip.com"],
+            streams,
+            invite_expires_in_days=invite_expires_in_days,
+        )
         prereg_users = PreregistrationUser.objects.filter(
             referred_by__realm=self.user_profile.realm
         )
@@ -686,8 +706,13 @@ class NormalActionsTest(BaseAction):
         streams = []
         for stream_name in ["Denmark", "Verona"]:
             streams.append(get_stream(stream_name, self.user_profile.realm))
+
+        invite_expires_in_days = 2
         do_create_multiuse_invite_link(
-            self.user_profile, PreregistrationUser.INVITE_AS["MEMBER"], streams
+            self.user_profile,
+            PreregistrationUser.INVITE_AS["MEMBER"],
+            invite_expires_in_days,
+            streams,
         )
 
         multiuse_object = MultiuseInvite.objects.get()
@@ -705,7 +730,13 @@ class NormalActionsTest(BaseAction):
         for stream_name in ["Denmark", "Scotland"]:
             streams.append(get_stream(stream_name, self.user_profile.realm))
 
-        do_invite_users(self.user_profile, ["foo@zulip.com"], streams, False)
+        invite_expires_in_days = 2
+        do_invite_users(
+            self.user_profile,
+            ["foo@zulip.com"],
+            streams,
+            invite_expires_in_days=invite_expires_in_days,
+        )
         prereg_user = PreregistrationUser.objects.get(email="foo@zulip.com")
 
         events = self.verify_action(
@@ -1202,6 +1233,26 @@ class NormalActionsTest(BaseAction):
         assert isinstance(events[1]["person"]["avatar_url"], str)
         assert isinstance(events[1]["person"]["avatar_url_medium"], str)
 
+    def test_change_user_delivery_email_email_address_visibility_everyone(self) -> None:
+        do_set_realm_property(
+            self.user_profile.realm,
+            "email_address_visibility",
+            Realm.EMAIL_ADDRESS_VISIBILITY_EVERYONE,
+            acting_user=None,
+        )
+        # Important: We need to refresh from the database here so that
+        # we don't have a stale UserProfile object with an old value
+        # for email being passed into this next function.
+        self.user_profile.refresh_from_db()
+        action = lambda: do_change_user_delivery_email(self.user_profile, "newhamlet@zulip.com")
+        events = self.verify_action(action, num_events=3, client_gravatar=False)
+
+        check_realm_user_update("events[0]", events[0], "delivery_email")
+        check_realm_user_update("events[1]", events[1], "avatar_fields")
+        check_realm_user_update("events[2]", events[2], "email")
+        assert isinstance(events[1]["person"]["avatar_url"], str)
+        assert isinstance(events[1]["person"]["avatar_url_medium"], str)
+
     def test_change_realm_authentication_methods(self) -> None:
         def fake_backends() -> Any:
             backends = (
@@ -1422,13 +1473,13 @@ class NormalActionsTest(BaseAction):
                 # These settings are tested in their own tests.
                 continue
 
-            do_change_notification_settings(
+            do_change_user_setting(
                 self.user_profile, notification_setting, False, acting_user=self.user_profile
             )
 
             for setting_value in [True, False]:
                 events = self.verify_action(
-                    lambda: do_change_notification_settings(
+                    lambda: do_change_user_setting(
                         self.user_profile,
                         notification_setting,
                         setting_value,
@@ -1441,7 +1492,7 @@ class NormalActionsTest(BaseAction):
 
                 # Also test with notification_settings_null=True
                 events = self.verify_action(
-                    lambda: do_change_notification_settings(
+                    lambda: do_change_user_setting(
                         self.user_profile,
                         notification_setting,
                         setting_value,
@@ -1458,7 +1509,7 @@ class NormalActionsTest(BaseAction):
         notification_setting = "notification_sound"
 
         events = self.verify_action(
-            lambda: do_change_notification_settings(
+            lambda: do_change_user_setting(
                 self.user_profile, notification_setting, "ding", acting_user=self.user_profile
             ),
             num_events=2,
@@ -1470,7 +1521,7 @@ class NormalActionsTest(BaseAction):
         notification_setting = "desktop_icon_count_display"
 
         events = self.verify_action(
-            lambda: do_change_notification_settings(
+            lambda: do_change_user_setting(
                 self.user_profile, notification_setting, 2, acting_user=self.user_profile
             ),
             num_events=2,
@@ -1479,7 +1530,7 @@ class NormalActionsTest(BaseAction):
         check_update_global_notifications("events[1]", events[1], 2)
 
         events = self.verify_action(
-            lambda: do_change_notification_settings(
+            lambda: do_change_user_setting(
                 self.user_profile, notification_setting, 1, acting_user=self.user_profile
             ),
             num_events=2,
@@ -2061,10 +2112,11 @@ class NormalActionsTest(BaseAction):
 
     def test_display_setting_event_not_sent(self) -> None:
         events = self.verify_action(
-            lambda: do_set_user_display_setting(
+            lambda: do_change_user_setting(
                 self.user_profile,
                 "default_view",
                 "all_messages",
+                acting_user=self.user_profile,
             ),
             state_change_expected=True,
             user_settings_object=True,
@@ -2073,7 +2125,7 @@ class NormalActionsTest(BaseAction):
 
     def test_notification_setting_event_not_sent(self) -> None:
         events = self.verify_action(
-            lambda: do_change_notification_settings(
+            lambda: do_change_user_setting(
                 self.user_profile,
                 "enable_sounds",
                 False,
@@ -2095,13 +2147,15 @@ class RealmPropertyActionTest(BaseAction):
             message_retention_days=[10, 20],
             name=["Zulip", "New Name"],
             waiting_period_threshold=[10, 20],
-            create_stream_policy=[4, 3, 2, 1],
-            invite_to_stream_policy=[4, 3, 2, 1],
-            private_message_policy=[2, 1],
-            user_group_edit_policy=[1, 2, 3, 4],
-            wildcard_mention_policy=[7, 6, 5, 4, 3, 2, 1],
-            email_address_visibility=[Realm.EMAIL_ADDRESS_VISIBILITY_ADMINS],
-            bot_creation_policy=[Realm.BOT_CREATION_EVERYONE],
+            create_public_stream_policy=Realm.COMMON_POLICY_TYPES,
+            create_private_stream_policy=Realm.COMMON_POLICY_TYPES,
+            create_web_public_stream_policy=Realm.CREATE_WEB_PUBLIC_STREAM_POLICY_TYPES,
+            invite_to_stream_policy=Realm.COMMON_POLICY_TYPES,
+            private_message_policy=Realm.PRIVATE_MESSAGE_POLICY_TYPES,
+            user_group_edit_policy=Realm.COMMON_POLICY_TYPES,
+            wildcard_mention_policy=Realm.WILDCARD_MENTION_POLICY_TYPES,
+            email_address_visibility=Realm.EMAIL_ADDRESS_VISIBILITY_TYPES,
+            bot_creation_policy=Realm.BOT_CREATION_POLICY_TYPES,
             video_chat_provider=[
                 Realm.VIDEO_CHAT_PROVIDERS["jitsi_meet"]["id"],
             ],
@@ -2110,9 +2164,10 @@ class RealmPropertyActionTest(BaseAction):
             ],
             default_code_block_language=["python", "javascript"],
             message_content_delete_limit_seconds=[1000, 1100, 1200],
-            invite_to_realm_policy=[6, 4, 3, 2, 1],
-            move_messages_between_streams_policy=[4, 3, 2, 1],
-            add_custom_emoji_policy=[4, 3, 2, 1],
+            invite_to_realm_policy=Realm.INVITE_TO_REALM_POLICY_TYPES,
+            move_messages_between_streams_policy=Realm.COMMON_POLICY_TYPES,
+            add_custom_emoji_policy=Realm.COMMON_POLICY_TYPES,
+            delete_own_message_policy=Realm.COMMON_MESSAGE_POLICY_TYPES,
         )
 
         vals = test_values.get(name)
@@ -2136,14 +2191,23 @@ class RealmPropertyActionTest(BaseAction):
         for count, val in enumerate(vals[1:]):
             now = timezone_now()
             state_change_expected = True
+            old_value = vals[count]
+            num_events = 1
+            if name == "email_address_visibility" and Realm.EMAIL_ADDRESS_VISIBILITY_EVERYONE in [
+                old_value,
+                val,
+            ]:
+                # email update event is sent for each user.
+                num_events = 11
+
             events = self.verify_action(
                 lambda: do_set_realm_property(
                     self.user_profile.realm, name, val, acting_user=self.user_profile
                 ),
                 state_change_expected=state_change_expected,
+                num_events=num_events,
             )
 
-            old_value = vals[count]
             self.assertEqual(
                 RealmAuditLog.objects.filter(
                     realm=self.user_profile.realm,
@@ -2162,14 +2226,90 @@ class RealmPropertyActionTest(BaseAction):
             )
             check_realm_update("events[0]", events[0], name)
 
+            if name == "email_address_visibility" and Realm.EMAIL_ADDRESS_VISIBILITY_EVERYONE in [
+                old_value,
+                val,
+            ]:
+                check_realm_user_update("events[1]", events[1], "email")
+
     def test_change_realm_property(self) -> None:
         for prop in Realm.property_types:
             with self.settings(SEND_DIGEST_EMAILS=True):
                 self.do_set_realm_property_test(prop)
 
+    def do_set_realm_user_default_setting_test(self, name: str) -> None:
+        bool_tests: List[bool] = [True, False, True]
+        test_values: Dict[str, Any] = dict(
+            color_scheme=UserProfile.COLOR_SCHEME_CHOICES,
+            default_view=["recent_topics", "all_messages"],
+            emojiset=[emojiset["key"] for emojiset in RealmUserDefault.emojiset_choices()],
+            demote_inactive_streams=UserProfile.DEMOTE_STREAMS_CHOICES,
+            desktop_icon_count_display=[1, 2, 3],
+            notification_sound=["zulip", "ding"],
+            email_notifications_batching_period_seconds=[120, 300],
+        )
+
+        vals = test_values.get(name)
+        property_type = RealmUserDefault.property_types[name]
+
+        if property_type is bool:
+            vals = bool_tests
+
+        if vals is None:
+            raise AssertionError(f"No test created for {name}")
+
+        realm_user_default = RealmUserDefault.objects.get(realm=self.user_profile.realm)
+        now = timezone_now()
+        do_set_realm_user_default_setting(
+            realm_user_default, name, vals[0], acting_user=self.user_profile
+        )
+        self.assertEqual(
+            RealmAuditLog.objects.filter(
+                realm=self.user_profile.realm,
+                event_type=RealmAuditLog.REALM_DEFAULT_USER_SETTINGS_CHANGED,
+                event_time__gte=now,
+                acting_user=self.user_profile,
+            ).count(),
+            1,
+        )
+        for count, val in enumerate(vals[1:]):
+            now = timezone_now()
+            state_change_expected = True
+            events = self.verify_action(
+                lambda: do_set_realm_user_default_setting(
+                    realm_user_default, name, val, acting_user=self.user_profile
+                ),
+                state_change_expected=state_change_expected,
+            )
+
+            old_value = vals[count]
+            self.assertEqual(
+                RealmAuditLog.objects.filter(
+                    realm=self.user_profile.realm,
+                    event_type=RealmAuditLog.REALM_DEFAULT_USER_SETTINGS_CHANGED,
+                    event_time__gte=now,
+                    acting_user=self.user_profile,
+                    extra_data=orjson.dumps(
+                        {
+                            RealmAuditLog.OLD_VALUE: old_value,
+                            RealmAuditLog.NEW_VALUE: val,
+                            "property": name,
+                        }
+                    ).decode(),
+                ).count(),
+                1,
+            )
+            check_realm_default_update("events[0]", events[0], name)
+
+    def test_change_realm_user_default_setting(self) -> None:
+        for prop in RealmUserDefault.property_types:
+            if prop == "default_language":
+                continue
+            self.do_set_realm_user_default_setting_test(prop)
+
 
 class UserDisplayActionTest(BaseAction):
-    def do_set_user_display_settings_test(self, setting_name: str) -> None:
+    def do_change_user_settings_test(self, setting_name: str) -> None:
         """Test updating each setting in UserProfile.property_types dict."""
 
         test_changes: Dict[str, Any] = dict(
@@ -2180,7 +2320,19 @@ class UserDisplayActionTest(BaseAction):
             color_scheme=[2, 3, 1],
         )
 
-        num_events = 2
+        user_settings_object = True
+        num_events = 1
+
+        legacy_setting = setting_name in UserProfile.display_settings_legacy
+        if legacy_setting:
+            # Two events:`update_display_settings` and `user_settings`.
+            # `update_display_settings` is only sent for settings added
+            # before feature level 89 which introduced `user_settings`.
+            # We send both events so that older clients that do not
+            # rely on `user_settings` don't break.
+            num_events = 2
+            user_settings_object = False
+
         values = test_changes.get(setting_name)
 
         property_type = UserProfile.property_types[setting_name]
@@ -2195,16 +2347,26 @@ class UserDisplayActionTest(BaseAction):
 
         for value in values:
             events = self.verify_action(
-                lambda: do_set_user_display_setting(self.user_profile, setting_name, value),
+                lambda: do_change_user_setting(
+                    self.user_profile, setting_name, value, acting_user=self.user_profile
+                ),
                 num_events=num_events,
+                user_settings_object=user_settings_object,
             )
 
             check_user_settings_update("events[0]", events[0])
-            check_update_display_settings("events[1]", events[1])
+            if legacy_setting:
+                # Only settings added before feature level 89
+                # generate this event.
+                self.assert_length(events, 2)
+                check_update_display_settings("events[1]", events[1])
 
-    def test_set_user_display_settings(self) -> None:
+    def test_change_user_settings(self) -> None:
         for prop in UserProfile.property_types:
-            self.do_set_user_display_settings_test(prop)
+            # Notification settings have a separate test suite, which
+            # handles their separate legacy event type.
+            if prop not in UserProfile.notification_settings_legacy:
+                self.do_change_user_settings_test(prop)
 
     def test_set_user_timezone(self) -> None:
         values = ["America/Denver", "Pacific/Pago_Pago", "Pacific/Galapagos", ""]
@@ -2212,7 +2374,9 @@ class UserDisplayActionTest(BaseAction):
 
         for value in values:
             events = self.verify_action(
-                lambda: do_set_user_display_setting(self.user_profile, "timezone", value),
+                lambda: do_change_user_setting(
+                    self.user_profile, "timezone", value, acting_user=self.user_profile
+                ),
                 num_events=num_events,
             )
 
@@ -2307,9 +2471,16 @@ class SubscribeActionTest(BaseAction):
         events = self.verify_action(action, include_subscribers=include_subscribers)
         check_stream_update("events[0]", events[0])
 
-        # Update stream privacy
-        action = lambda: do_change_stream_invite_only(
-            stream, True, history_public_to_subscribers=True
+        # Update stream privacy - make stream web public
+        action = lambda: do_change_stream_permission(
+            stream, invite_only=False, history_public_to_subscribers=True, is_web_public=True
+        )
+        events = self.verify_action(action, include_subscribers=include_subscribers)
+        check_stream_update("events[0]", events[0])
+
+        # Update stream privacy - make stream private
+        action = lambda: do_change_stream_permission(
+            stream, invite_only=True, history_public_to_subscribers=True, is_web_public=False
         )
         events = self.verify_action(action, include_subscribers=include_subscribers)
         check_stream_update("events[0]", events[0])
@@ -2344,7 +2515,9 @@ class SubscribeActionTest(BaseAction):
 
 class DraftActionTest(BaseAction):
     def do_enable_drafts_synchronization(self, user_profile: UserProfile) -> None:
-        do_set_user_display_setting(user_profile, "enable_drafts_synchronization", True)
+        do_change_user_setting(
+            user_profile, "enable_drafts_synchronization", True, acting_user=self.user_profile
+        )
 
     def test_draft_create_event(self) -> None:
         self.do_enable_drafts_synchronization(self.user_profile)

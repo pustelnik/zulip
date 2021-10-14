@@ -88,6 +88,7 @@ def get_apns_context() -> Optional[APNsContext]:
     apns = aioapns.APNs(
         client_cert=settings.APNS_CERT_FILE,
         topic=settings.APNS_TOPIC,
+        max_connection_attempts=APNS_MAX_RETRIES,
         loop=loop,
         use_sandbox=settings.APNS_SANDBOX,
     )
@@ -157,52 +158,40 @@ def send_apple_push_notification(
     logger.info("APNs: Sending notification for user %d to %d devices", user_id, len(devices))
     payload_data = modernize_apns_payload(payload_data).copy()
     message = {**payload_data.pop("custom", {}), "aps": payload_data}
-    retries_left = APNS_MAX_RETRIES
     for device in devices:
         # TODO obviously this should be made to actually use the async
         request = aioapns.NotificationRequest(
             device_token=device.token, message=message, time_to_live=24 * 3600
         )
 
-        async def attempt_send() -> Optional[str]:
-            assert apns_context is not None
-            try:
-                result = await apns_context.apns.send_notification(request)
-                return "Success" if result.is_successful else result.description
-            except aioapns.exceptions.ConnectionClosed as e:  # nocoverage
-                logger.warning(
-                    "APNs: ConnectionClosed sending for user %d to device %s: %s",
-                    user_id,
-                    device.token,
-                    e.__class__.__name__,
-                )
-                return None
-            except aioapns.exceptions.ConnectionError as e:  # nocoverage
-                logger.warning(
-                    "APNs: ConnectionError sending for user %d to device %s: %s",
-                    user_id,
-                    device.token,
-                    e.__class__.__name__,
-                )
-                return None
+        try:
+            result = apns_context.loop.run_until_complete(
+                apns_context.apns.send_notification(request)
+            )
+        except aioapns.exceptions.ConnectionError as e:
+            logger.warning(
+                "APNs: ConnectionError sending for user %d to device %s: %s",
+                user_id,
+                device.token,
+                e.__class__.__name__,
+            )
+            continue
 
-        result = apns_context.loop.run_until_complete(attempt_send())
-        while result is None and retries_left > 0:
-            retries_left -= 1
-            result = apns_context.loop.run_until_complete(attempt_send())
-        if result is None:
-            result = "HTTP error, retries exhausted"
-
-        if result == "Success":
+        if result.is_successful:
             logger.info("APNs: Success sending for user %d to device %s", user_id, device.token)
-        elif result in ["Unregistered", "BadDeviceToken", "DeviceTokenNotForTopic"]:
-            logger.info("APNs: Removing invalid/expired token %s (%s)", device.token, result)
+        elif result.description in ["Unregistered", "BadDeviceToken", "DeviceTokenNotForTopic"]:
+            logger.info(
+                "APNs: Removing invalid/expired token %s (%s)", device.token, result.description
+            )
             # We remove all entries for this token (There
             # could be multiple for different Zulip servers).
             DeviceTokenClass.objects.filter(token=device.token, kind=DeviceTokenClass.APNS).delete()
         else:
             logger.warning(
-                "APNs: Failed to send for user %d to device %s: %s", user_id, device.token, result
+                "APNs: Failed to send for user %d to device %s: %s",
+                user_id,
+                device.token,
+                result.description,
             )
 
 
@@ -402,7 +391,7 @@ def send_notifications_to_bouncer(
     apns_payload: Dict[str, Any],
     gcm_payload: Dict[str, Any],
     gcm_options: Dict[str, Any],
-) -> None:
+) -> Tuple[int, int]:
     post_data = {
         "user_id": user_profile_id,
         "apns_payload": apns_payload,
@@ -410,7 +399,11 @@ def send_notifications_to_bouncer(
         "gcm_options": gcm_options,
     }
     # Calls zilencer.views.remote_server_notify_push
-    send_json_to_push_bouncer("POST", "push/notify", post_data)
+    response_data = send_json_to_push_bouncer("POST", "push/notify", post_data)
+    assert isinstance(response_data["total_android_devices"], int)
+    assert isinstance(response_data["total_apple_devices"], int)
+
+    return response_data["total_android_devices"], response_data["total_apple_devices"]
 
 
 #
@@ -548,7 +541,9 @@ def initialize_push_notifications() -> None:
         )
 
 
-def get_gcm_alert(message: Message, mentioned_user_group_name: Optional[str] = None) -> str:
+def get_gcm_alert(
+    message: Message, trigger: str, mentioned_user_group_name: Optional[str] = None
+) -> str:
     """
     Determine what alert string to display based on the missed messages.
     """
@@ -556,23 +551,23 @@ def get_gcm_alert(message: Message, mentioned_user_group_name: Optional[str] = N
     display_recipient = get_display_recipient(message.recipient)
     if (
         message.recipient.type == Recipient.HUDDLE
-        and message.trigger == NotificationTriggers.PRIVATE_MESSAGE
+        and trigger == NotificationTriggers.PRIVATE_MESSAGE
     ):
         return f"New private group message from {sender_str}"
     elif (
         message.recipient.type == Recipient.PERSONAL
-        and message.trigger == NotificationTriggers.PRIVATE_MESSAGE
+        and trigger == NotificationTriggers.PRIVATE_MESSAGE
     ):
         return f"New private message from {sender_str}"
-    elif message.is_stream_message() and message.trigger == NotificationTriggers.MENTION:
+    elif message.is_stream_message() and trigger == NotificationTriggers.MENTION:
         if mentioned_user_group_name is None:
             return f"{sender_str} mentioned you in #{display_recipient}"
         else:
             return f"{sender_str} mentioned @{mentioned_user_group_name} in #{display_recipient}"
-    elif message.is_stream_message() and message.trigger == NotificationTriggers.WILDCARD_MENTION:
+    elif message.is_stream_message() and trigger == NotificationTriggers.WILDCARD_MENTION:
         return f"{sender_str} mentioned everyone in #{display_recipient}"
     else:
-        assert message.is_stream_message() and message.trigger == NotificationTriggers.STREAM_PUSH
+        assert message.is_stream_message() and trigger == NotificationTriggers.STREAM_PUSH
         return f"New stream message from {sender_str} in #{display_recipient}"
 
 
@@ -645,7 +640,7 @@ def get_mobile_push_content(rendered_content: str) -> str:
             + "*"
         )
 
-    elem = lxml.html.fromstring(rendered_content)
+    elem = lxml.html.fragment_fromstring(rendered_content, create_parent=True)
     plain_text = process(elem)
     return plain_text
 
@@ -718,19 +713,22 @@ def get_apns_alert_title(message: Message) -> str:
 
 
 def get_apns_alert_subtitle(
-    user_profile: UserProfile, message: Message, mentioned_user_group_name: Optional[str] = None
+    user_profile: UserProfile,
+    message: Message,
+    trigger: str,
+    mentioned_user_group_name: Optional[str] = None,
 ) -> str:
     """
     On an iOS notification, this is the second bolded line.
     """
-    if message.trigger == NotificationTriggers.MENTION:
+    if trigger == NotificationTriggers.MENTION:
         if mentioned_user_group_name is not None:
             return _("{full_name} mentioned @{user_group_name}:").format(
                 full_name=message.sender.full_name, user_group_name=mentioned_user_group_name
             )
         else:
             return _("{full_name} mentioned you:").format(full_name=message.sender.full_name)
-    elif message.trigger == NotificationTriggers.WILDCARD_MENTION:
+    elif trigger == NotificationTriggers.WILDCARD_MENTION:
         return _("{full_name} mentioned everyone:").format(full_name=message.sender.full_name)
     elif message.recipient.type == Recipient.PERSONAL:
         return ""
@@ -769,6 +767,7 @@ def get_apns_badge_count_future(
 def get_message_payload_apns(
     user_profile: UserProfile,
     message: Message,
+    trigger: str,
     mentioned_user_group_id: Optional[int] = None,
     mentioned_user_group_name: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -787,7 +786,7 @@ def get_message_payload_apns(
             "alert": {
                 "title": get_apns_alert_title(message),
                 "subtitle": get_apns_alert_subtitle(
-                    user_profile, message, mentioned_user_group_name
+                    user_profile, message, trigger, mentioned_user_group_name
                 ),
                 "body": content,
             },
@@ -801,6 +800,7 @@ def get_message_payload_apns(
 def get_message_payload_gcm(
     user_profile: UserProfile,
     message: Message,
+    trigger: str,
     mentioned_user_group_id: Optional[int] = None,
     mentioned_user_group_name: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -813,7 +813,7 @@ def get_message_payload_gcm(
         content, truncated = truncate_content(get_mobile_push_content(message.rendered_content))
         data.update(
             event="message",
-            alert=get_gcm_alert(message, mentioned_user_group_name),
+            alert=get_gcm_alert(message, trigger, mentioned_user_group_name),
             zulip_message_id=message.id,  # message_id is reserved for CCS
             time=datetime_to_timestamp(message.date_sent),
             content=content,
@@ -896,6 +896,17 @@ def handle_push_notification(user_profile_id: int, missed_message: Dict[str, Any
         return
     user_profile = get_user_profile_by_id(user_profile_id)
 
+    if user_profile.is_bot:
+        # BUG: Investigate why it's possible to get here.
+        return  # nocoverage
+
+    if not (
+        user_profile.enable_offline_push_notifications
+        or user_profile.enable_online_push_notifications
+    ):
+        # BUG: Investigate why it's possible to get here.
+        return  # nocoverage
+
     try:
         (message, user_message) = access_message(user_profile, missed_message["message_id"])
     except JsonableError:
@@ -933,7 +944,7 @@ def handle_push_notification(user_profile_id: int, missed_message: Dict[str, Any
             )
             return
 
-    message.trigger = missed_message["trigger"]
+    trigger = missed_message["trigger"]
     mentioned_user_group_name = None
     mentioned_user_group_id = missed_message.get("mentioned_user_group_id")
 
@@ -944,15 +955,23 @@ def handle_push_notification(user_profile_id: int, missed_message: Dict[str, Any
         mentioned_user_group_name = user_group.name
 
     apns_payload = get_message_payload_apns(
-        user_profile, message, mentioned_user_group_id, mentioned_user_group_name
+        user_profile, message, trigger, mentioned_user_group_id, mentioned_user_group_name
     )
     gcm_payload, gcm_options = get_message_payload_gcm(
-        user_profile, message, mentioned_user_group_id, mentioned_user_group_name
+        user_profile, message, trigger, mentioned_user_group_id, mentioned_user_group_name
     )
     logger.info("Sending push notifications to mobile clients for user %s", user_profile_id)
 
     if uses_notification_bouncer():
-        send_notifications_to_bouncer(user_profile_id, apns_payload, gcm_payload, gcm_options)
+        total_android_devices, total_apple_devices = send_notifications_to_bouncer(
+            user_profile_id, apns_payload, gcm_payload, gcm_options
+        )
+        logger.info(
+            "Sent mobile push notifications for user %s through bouncer: %s via FCM devices, %s via APNs devices",
+            user_profile_id,
+            total_android_devices,
+            total_apple_devices,
+        )
         return
 
     android_devices = list(
@@ -963,6 +982,11 @@ def handle_push_notification(user_profile_id: int, missed_message: Dict[str, Any
         PushDeviceToken.objects.filter(user=user_profile, kind=PushDeviceToken.APNS)
     )
 
+    logger.info(
+        "Sending mobile push notifications for user %s: %s via FCM devices, %s via APNs devices",
+        user_profile_id,
+        len(android_devices),
+        len(apple_devices),
+    )
     send_apple_push_notification(user_profile.id, apple_devices, apns_payload)
-
     send_android_push_notification(android_devices, gcm_payload, gcm_options)

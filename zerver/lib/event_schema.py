@@ -45,7 +45,7 @@ from zerver.lib.data_types import (
     make_checker,
 )
 from zerver.lib.topic import ORIG_TOPIC, TOPIC_LINKS, TOPIC_NAME
-from zerver.models import Realm, Stream, Subscription, UserProfile
+from zerver.models import Realm, RealmUserDefault, Stream, Subscription, UserProfile
 
 # These fields are used for "stream" events, and are included in the
 # larger "subscription" events that also contain personal settings.
@@ -712,7 +712,10 @@ realm_emoji_type = DictType(
         ("source_url", str),
         ("deactivated", bool),
         ("author_id", int),
-    ]
+    ],
+    optional_keys=[
+        ("still_url", str),
+    ],
 )
 
 realm_emoji_update_event = event_dict_type(
@@ -896,6 +899,32 @@ def check_realm_update(
         assert isinstance(value, str)
     else:
         raise AssertionError(f"Unexpected property type {property_type}")
+
+
+realm_user_settings_defaults_update_event = event_dict_type(
+    required_keys=[
+        ("type", Equals("realm_user_settings_defaults")),
+        ("op", Equals("update")),
+        ("property", str),
+        ("value", value_type),
+    ],
+)
+_check_realm_default_update = make_checker(realm_user_settings_defaults_update_event)
+
+
+def check_realm_default_update(
+    var_name: str,
+    event: Dict[str, object],
+    prop: str,
+) -> None:
+    _check_realm_default_update(var_name, event)
+
+    assert prop == event["property"]
+    assert prop != "default_language"
+    assert prop in RealmUserDefault.property_types
+
+    prop_type = RealmUserDefault.property_types[prop]
+    assert isinstance(event["value"], prop_type)
 
 
 authentication_dict = DictType(
@@ -1099,6 +1128,12 @@ realm_user_person_types = dict(
             # vertical formatting
             ("user_id", int),
             ("delivery_email", str),
+        ],
+    ),
+    email=DictType(
+        required_keys=[
+            ("user_id", int),
+            ("new_email", str),
         ],
     ),
     full_name=DictType(
@@ -1443,11 +1478,8 @@ def check_user_settings_update(
     assert isinstance(setting_name, str)
     if setting_name == "timezone":
         assert isinstance(value, str)
-    elif setting_name in UserProfile.property_types:
-        setting_type = UserProfile.property_types[setting_name]
-        assert isinstance(value, setting_type)
     else:
-        setting_type = UserProfile.notification_setting_types[setting_name]
+        setting_type = UserProfile.property_types[setting_name]
         assert isinstance(value, setting_type)
 
     if setting_name == "default_language":
@@ -1473,7 +1505,7 @@ def check_update_global_notifications(
     desired_val: Union[bool, int, str],
 ) -> None:
     """
-    See UserProfile.notification_setting_types for
+    See UserProfile.notification_settings_legacy for
     more details.
     """
     _check_update_global_notifications(var_name, event)
@@ -1482,7 +1514,7 @@ def check_update_global_notifications(
     assert setting == desired_val
 
     assert isinstance(setting_name, str)
-    setting_type = UserProfile.notification_setting_types[setting_name]
+    setting_type = UserProfile.notification_settings_legacy[setting_name]
     assert isinstance(setting, setting_type)
 
 

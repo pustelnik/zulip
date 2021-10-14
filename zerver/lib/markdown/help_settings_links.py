@@ -5,6 +5,8 @@ from markdown import Markdown
 from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
 
+from zerver.lib.markdown.preprocessor_priorities import PREPROCESSOR_PRIORITES
+
 # There is a lot of duplicated code between this file and
 # help_relative_links.py. So if you're making a change here consider making
 # it there as well.
@@ -43,6 +45,11 @@ link_mapping = {
         "Manage organization",
         "Organization permissions",
         "/#organization/organization-permissions",
+    ],
+    "default-user-settings": [
+        "Manage organization",
+        "Default user settings",
+        "/#organization/organization-level-user-defaults",
     ],
     "emoji-settings": ["Manage organization", "Custom emoji", "/#organization/emoji-settings"],
     "auth-methods": [
@@ -91,8 +98,8 @@ link_mapping = {
 }
 
 settings_markdown = """
-1. From your desktop, click on the **gear**
-   (<i class="fa fa-cog"></i>) in the upper right corner.
+1. Click on the **gear** (<i class="fa fa-cog"></i>) icon in the upper
+   right corner of the web or desktop app.
 
 1. Select **{setting_type_name}**.
 
@@ -104,7 +111,7 @@ class SettingHelpExtension(Extension):
     def extendMarkdown(self, md: Markdown) -> None:
         """Add SettingHelpExtension to the Markdown instance."""
         md.registerExtension(self)
-        md.preprocessors.register(Setting(), "setting", 515)
+        md.preprocessors.register(Setting(), "setting", PREPROCESSOR_PRIORITES["setting"])
 
 
 relative_settings_links: Optional[bool] = None

@@ -71,8 +71,10 @@ from zerver.lib.exceptions import JsonableError
 from zerver.lib.mobile_auth_otp import is_valid_otp
 from zerver.lib.rate_limiter import RateLimitedObject
 from zerver.lib.redis_utils import get_dict_from_redis, get_redis_client, put_dict_in_redis
-from zerver.lib.request import get_request_notes
+from zerver.lib.request import RequestNotes
 from zerver.lib.subdomains import get_subdomain
+from zerver.lib.types import ProfileDataElementValue
+from zerver.lib.url_encoding import add_query_to_redirect_url
 from zerver.lib.users import check_full_name, validate_user_custom_profile_field
 from zerver.models import (
     CustomProfileField,
@@ -169,6 +171,10 @@ def require_email_format_usernames(realm: Optional[Realm] = None) -> bool:
 
 
 def is_user_active(user_profile: UserProfile, return_data: Optional[Dict[str, Any]] = None) -> bool:
+    if user_profile.realm.deactivated:
+        if return_data is not None:
+            return_data["inactive_realm"] = True
+        return False
     if not user_profile.is_active:
         if return_data is not None:
             if user_profile.is_mirror_dummy:
@@ -176,10 +182,6 @@ def is_user_active(user_profile: UserProfile, return_data: Optional[Dict[str, An
                 return_data["is_mirror_dummy"] = True
             return_data["inactive_user"] = True
             return_data["inactive_user_id"] = user_profile.id
-        return False
-    if user_profile.realm.deactivated:
-        if return_data is not None:
-            return_data["inactive_realm"] = True
         return False
 
     return True
@@ -251,7 +253,7 @@ def rate_limit_authentication_by_username(request: HttpRequest, username: str) -
 
 
 def auth_rate_limiting_already_applied(request: HttpRequest) -> bool:
-    request_notes = get_request_notes(request)
+    request_notes = RequestNotes.get_notes(request)
 
     return any(
         isinstance(r.entity, RateLimitedAuthenticationByUsername)
@@ -270,7 +272,7 @@ def rate_limit_auth(auth_func: AuthFuncT, *args: Any, **kwargs: Any) -> Optional
 
     request = args[1]
     username = kwargs["username"]
-    if get_request_notes(request).client is None or not client_is_exempt_from_rate_limiting(
+    if RequestNotes.get_notes(request).client is None or not client_is_exempt_from_rate_limiting(
         request
     ):
         # Django cycles through enabled authentication backends until one succeeds,
@@ -291,6 +293,48 @@ def rate_limit_auth(auth_func: AuthFuncT, *args: Any, **kwargs: Any) -> Optional
         RateLimitedAuthenticationByUsername(username).clear_history()
 
     return result
+
+
+@decorator
+def log_auth_attempts(auth_func: AuthFuncT, *args: Any, **kwargs: Any) -> Optional[UserProfile]:
+    result = auth_func(*args, **kwargs)
+
+    backend_instance = args[0]
+    request = args[1]
+    username = kwargs["username"]
+    realm = kwargs["realm"]
+    return_data = kwargs["return_data"]
+
+    log_auth_attempt(
+        backend_instance.logger,
+        request,
+        realm,
+        username,
+        succeeded=result is not None,
+        return_data=return_data,
+    )
+
+    return result
+
+
+def log_auth_attempt(
+    logger: logging.Logger,
+    request: HttpRequest,
+    realm: Realm,
+    username: str,
+    succeeded: bool,
+    return_data: Dict[str, Any],
+) -> None:
+    ip_addr = request.META.get("REMOTE_ADDR")
+    outcome = "success" if succeeded else "failed"
+    logger.info(
+        "Authentication attempt from %s: subdomain=%s;username=%s;outcome=%s;return_data=%s",
+        ip_addr,
+        realm.subdomain,
+        username,
+        outcome,
+        return_data,
+    )
 
 
 class ZulipAuthMixin:
@@ -370,6 +414,7 @@ class EmailAuthBackend(ZulipAuthMixin):
     name = "email"
 
     @rate_limit_auth
+    @log_auth_attempts
     def authenticate(
         self,
         request: HttpRequest,
@@ -432,6 +477,23 @@ def check_ldap_config() -> None:
     if not settings.LDAP_APPEND_DOMAIN:
         # Email search needs to be configured in this case.
         assert settings.AUTH_LDAP_USERNAME_ATTR and settings.AUTH_LDAP_REVERSE_EMAIL_SEARCH
+
+    # These two are alternatives approaches to deactivating users based on an ldap attribute
+    # and thus don't make sense to have enabled together.
+    assert not (
+        settings.AUTH_LDAP_USER_ATTR_MAP.get("userAccountControl")
+        and settings.AUTH_LDAP_USER_ATTR_MAP.get("deactivated")
+    )
+
+
+def ldap_should_sync_active_status() -> bool:
+    if "userAccountControl" in settings.AUTH_LDAP_USER_ATTR_MAP:
+        return True
+
+    if "deactivated" in settings.AUTH_LDAP_USER_ATTR_MAP:
+        return True
+
+    return False
 
 
 def find_ldap_users_by_email(email: str) -> List[_LDAPUser]:
@@ -671,15 +733,30 @@ class ZulipLDAPAuthBackendBase(ZulipAuthMixin, LDAPBackend):
             else:
                 logging.warning("Could not parse %s field for user %s", avatar_attr_name, user.id)
 
-    def is_account_control_disabled_user(self, ldap_user: _LDAPUser) -> bool:
-        """Implements the userAccountControl check for whether a user has been
-        disabled in an Active Directory server being integrated with
-        Zulip via LDAP."""
-        account_control_value = ldap_user.attrs[
-            settings.AUTH_LDAP_USER_ATTR_MAP["userAccountControl"]
-        ][0]
-        ldap_disabled = bool(int(account_control_value) & LDAP_USER_ACCOUNT_CONTROL_DISABLED_MASK)
-        return ldap_disabled
+    def is_user_disabled_in_ldap(self, ldap_user: _LDAPUser) -> bool:
+        """Implements checks for whether a user has been
+        disabled in the LDAP server being integrated with
+        Zulip."""
+        if "userAccountControl" in settings.AUTH_LDAP_USER_ATTR_MAP:
+            account_control_value = ldap_user.attrs[
+                settings.AUTH_LDAP_USER_ATTR_MAP["userAccountControl"]
+            ][0]
+            return bool(int(account_control_value) & LDAP_USER_ACCOUNT_CONTROL_DISABLED_MASK)
+
+        assert "deactivated" in settings.AUTH_LDAP_USER_ATTR_MAP
+        attr_value = ldap_user.attrs[settings.AUTH_LDAP_USER_ATTR_MAP["deactivated"]][0]
+
+        # In the LDAP specification, a Boolean attribute should be
+        # *exactly* either "TRUE" or "FALSE". However,
+        # https://www.freeipa.org/page/V4/User_Life-Cycle_Management suggests
+        # that FreeIPA at least documents using Yes/No for booleans.
+        true_values = ["TRUE", "YES"]
+        false_values = ["FALSE", "NO"]
+        attr_value_upper = attr_value.upper()
+        assert (
+            attr_value_upper in true_values or attr_value_upper in false_values
+        ), f"Invalid value '{attr_value}' in the LDAP attribute mapped to deactivated"
+        return attr_value_upper in true_values
 
     def is_account_realm_access_forbidden(self, ldap_user: _LDAPUser, realm: Realm) -> bool:
         # org_membership takes priority over AUTH_LDAP_ADVANCED_REALM_ACCESS_CONTROL.
@@ -778,6 +855,7 @@ class ZulipLDAPAuthBackend(ZulipLDAPAuthBackendBase):
     REALM_IS_NONE_ERROR = 1
 
     @rate_limit_auth
+    @log_auth_attempts
     def authenticate(
         self,
         request: Optional[HttpRequest] = None,
@@ -836,8 +914,8 @@ class ZulipLDAPAuthBackend(ZulipLDAPAuthBackendBase):
         if self.is_account_realm_access_forbidden(ldap_user, self._realm):
             raise ZulipLDAPException("User not allowed to access realm")
 
-        if "userAccountControl" in settings.AUTH_LDAP_USER_ATTR_MAP:  # nocoverage
-            ldap_disabled = self.is_account_control_disabled_user(ldap_user)
+        if ldap_should_sync_active_status():  # nocoverage
+            ldap_disabled = self.is_user_disabled_in_ldap(ldap_user)
             if ldap_disabled:
                 # Treat disabled users as deactivated in Zulip.
                 return_data["inactive_user"] = True
@@ -967,8 +1045,8 @@ class ZulipLDAPUserPopulator(ZulipLDAPAuthBackendBase):
         user = get_user_by_delivery_email(username, ldap_user.realm)
         built = False
         # Synchronise the UserProfile with its LDAP attributes:
-        if "userAccountControl" in settings.AUTH_LDAP_USER_ATTR_MAP:
-            user_disabled_in_ldap = self.is_account_control_disabled_user(ldap_user)
+        if ldap_should_sync_active_status():
+            user_disabled_in_ldap = self.is_user_disabled_in_ldap(ldap_user)
             if user_disabled_in_ldap:
                 if user.is_active:
                     ldap_logger.info(
@@ -1262,11 +1340,11 @@ def sync_user_profile_custom_fields(
         fields_by_var_name[var_name] = field
 
     existing_values = {}
-    for data in user_profile.profile_data:
+    for data in user_profile.profile_data():
         var_name = "_".join(data["name"].lower().split(" "))
         existing_values[var_name] = data["value"]
 
-    profile_data: List[Dict[str, Union[int, str, List[int]]]] = []
+    profile_data: List[Dict[str, Union[int, ProfileDataElementValue]]] = []
     for var_name, value in custom_field_name_to_value.items():
         try:
             field = fields_by_var_name[var_name]
@@ -1346,11 +1424,11 @@ def redirect_to_login(realm: Realm) -> HttpResponseRedirect:
     return HttpResponseRedirect(redirect_url)
 
 
-def redirect_deactivated_user_to_login(realm: Realm) -> HttpResponseRedirect:
+def redirect_deactivated_user_to_login(realm: Realm, email: str) -> HttpResponseRedirect:
     # Specifying the template name makes sure that the user is not redirected to dev_login in case of
     # a deactivated account on a test server.
     login_url = reverse("login_page", kwargs={"template_name": "zerver/login.html"})
-    redirect_url = realm.uri + login_url + "?is_deactivated=true"
+    redirect_url = add_query_to_redirect_url(realm.uri + login_url, f"is_deactivated={email}")
     return HttpResponseRedirect(redirect_url)
 
 
@@ -1559,18 +1637,17 @@ def social_auth_finish(
         return HttpResponseRedirect(reverse("find_account"))
 
     realm = Realm.objects.get(id=return_data["realm_id"])
+    if auth_backend_disabled or inactive_realm or no_verified_email or email_not_associated:
+        # Redirect to login page. We can't send to registration
+        # workflow with these errors. We will redirect to login page.
+        return redirect_to_login(realm)
     if inactive_user:
         backend.logger.info(
             "Failed login attempt for deactivated account: %s@%s",
             return_data["inactive_user_id"],
             return_data["realm_string_id"],
         )
-        return redirect_deactivated_user_to_login(realm)
-
-    if auth_backend_disabled or inactive_realm or no_verified_email or email_not_associated:
-        # Redirect to login page. We can't send to registration
-        # workflow with these errors. We will redirect to login page.
-        return redirect_to_login(realm)
+        return redirect_deactivated_user_to_login(realm, return_data["validated_email"])
 
     if invalid_email:
         # In case of invalid email, we will end up on registration page.
@@ -1635,6 +1712,18 @@ def social_auth_finish(
     # The next step is to call login_or_register_remote_user, but
     # there are two code paths here because of an optimization to save
     # a redirect on mobile and desktop.
+
+    # Authentication failures happen on the external provider's side, so we don't get to log those,
+    # but we should log the successes at least.
+    log_auth_attempt(
+        backend.logger,
+        strategy.request,
+        realm,
+        username=email_address,
+        succeeded=True,
+        return_data={},
+    )
+
     data_dict = ExternalAuthDataDict(
         subdomain=realm.subdomain,
         is_signup=is_signup,

@@ -5,7 +5,7 @@ import * as emojisets from "./emojisets";
 import {$t_html, get_language_name} from "./i18n";
 import * as loading from "./loading";
 import * as overlays from "./overlays";
-import * as settings_config from "./settings_config";
+import * as settings_org from "./settings_org";
 import * as settings_ui from "./settings_ui";
 import * as ui_report from "./ui_report";
 import {user_settings} from "./user_settings";
@@ -14,14 +14,15 @@ const meta = {
     loaded: false,
 };
 
-export let default_language_name;
+export const user_settings_panel = {};
+
+export let user_default_language_name;
 
 export function set_default_language_name(name) {
-    default_language_name = name;
+    user_default_language_name = name;
 }
 
-function change_display_setting(data, container, url, status_element, success_msg_html, sticky) {
-    const $status_el = container.find(`${status_element}`);
+function change_display_setting(data, $status_el, success_msg_html, sticky) {
     const status_is_sticky = $status_el.data("is_sticky");
     const display_message_html = status_is_sticky
         ? $status_el.data("sticky_msg_html")
@@ -35,68 +36,74 @@ function change_display_setting(data, container, url, status_element, success_ms
         $status_el.data("is_sticky", true);
         $status_el.data("sticky_msg_html", success_msg_html);
     }
-    settings_ui.do_settings_change(channel.patch, url, data, $status_el, opts);
+    settings_ui.do_settings_change(channel.patch, "/json/settings", data, $status_el, opts);
 }
 
-export function set_up() {
+export function set_up(settings_panel) {
     meta.loaded = true;
-    const container = $("#user-display-settings");
-    const language_modal_elem = "#user_default_language_modal";
-    const patch_url = "/json/settings";
+    const container = $(settings_panel.container);
+    const settings_object = settings_panel.settings_object;
+    const for_realm_settings = settings_panel.for_realm_settings;
 
     container.find(".display-settings-status").hide();
 
-    container.find(".setting_demote_inactive_streams").val(user_settings.demote_inactive_streams);
+    container.find(".setting_demote_inactive_streams").val(settings_object.demote_inactive_streams);
 
-    container.find(".setting_color_scheme").val(user_settings.color_scheme);
+    container.find(".setting_color_scheme").val(settings_object.color_scheme);
 
-    container.find(".setting_default_view").val(user_settings.default_view);
+    container.find(".setting_default_view").val(settings_object.default_view);
 
     container
         .find(".setting_twenty_four_hour_time")
-        .val(JSON.stringify(user_settings.twenty_four_hour_time));
+        .val(JSON.stringify(settings_object.twenty_four_hour_time));
 
     container
-        .find(`.setting_emojiset_choice[value="${CSS.escape(user_settings.emojiset)}"]`)
+        .find(`.setting_emojiset_choice[value="${CSS.escape(settings_object.emojiset)}"]`)
         .prop("checked", true);
 
-    $(`${CSS.escape(language_modal_elem)} [data-dismiss]`).on("click", () => {
-        overlays.close_modal(language_modal_elem);
-    });
-
-    const all_display_settings = settings_config.get_all_display_settings();
-    for (const setting of all_display_settings.settings.user_display_settings) {
-        container.find(`.${CSS.escape(setting)}`).on("change", function () {
-            const data = {};
-            data[setting] = JSON.stringify($(this).prop("checked"));
-
-            if (["left_side_userlist"].includes(setting)) {
-                change_display_setting(
-                    data,
-                    container,
-                    patch_url,
-                    ".display-settings-status",
-                    $t_html(
-                        {
-                            defaultMessage:
-                                "Saved. Please <z-link>reload</z-link> for the change to take effect.",
-                        },
-                        {"z-link": (content_html) => `<a class='reload_link'>${content_html}</a>`},
-                    ),
-                    true,
-                );
-            } else {
-                change_display_setting(data, container, patch_url, ".display-settings-status");
-            }
-        });
+    if (for_realm_settings) {
+        // For the realm-level defaults page, we use the common
+        // settings_org.js handlers, so we can return early here.
+        return;
     }
 
-    $(language_modal_elem)
+    $("#user_default_language_modal [data-dismiss]").on("click", () => {
+        overlays.close_modal("#user_default_language_modal");
+    });
+
+    // Common handler for sending requests to the server when an input
+    // element is changed.
+    container.on("change", "input[type=checkbox], select", function (e) {
+        const input_elem = $(e.currentTarget);
+        const setting = input_elem.attr("name");
+        const data = {};
+        data[setting] = settings_org.get_input_element_value(this);
+        const status_element = input_elem.closest(".subsection-parent").find(".alert-notification");
+
+        if (["left_side_userlist"].includes(setting)) {
+            change_display_setting(
+                data,
+                status_element,
+                $t_html(
+                    {
+                        defaultMessage:
+                            "Saved. Please <z-link>reload</z-link> for the change to take effect.",
+                    },
+                    {"z-link": (content_html) => `<a class='reload_link'>${content_html}</a>`},
+                ),
+                true,
+            );
+        } else {
+            change_display_setting(data, status_element);
+        }
+    });
+
+    $("#user_default_language_modal")
         .find(".language")
         .on("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
-            overlays.close_modal(language_modal_elem);
+            overlays.close_modal("#user_default_language_modal");
 
             const $link = $(e.target).closest("a[data-code]");
             const setting_value = $link.attr("data-code");
@@ -107,9 +114,7 @@ export function set_up() {
 
             change_display_setting(
                 data,
-                container,
-                patch_url,
-                ".language-settings-status",
+                container.find(".language-settings-status"),
                 $t_html(
                     {
                         defaultMessage:
@@ -124,36 +129,16 @@ export function set_up() {
     container.find(".setting_default_language").on("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        overlays.open_modal(language_modal_elem);
-    });
-
-    container.find(".setting_demote_inactive_streams").on("change", function () {
-        const data = {demote_inactive_streams: this.value};
-        change_display_setting(data, container, patch_url, ".display-settings-status");
-    });
-
-    container.find(".setting_color_scheme").on("change", function () {
-        const data = {color_scheme: this.value};
-        change_display_setting(data, container, patch_url, ".display-settings-status");
-    });
-
-    container.find(".setting_default_view").on("change", function () {
-        const data = {default_view: this.value};
-        change_display_setting(data, container, patch_url, ".display-settings-status");
+        overlays.open_modal("#user_default_language_modal");
     });
 
     $("body").on("click", ".reload_link", () => {
         window.location.reload();
     });
 
-    container.find(".setting_twenty_four_hour_time").on("change", function () {
-        const data = {twenty_four_hour_time: this.value};
-        change_display_setting(data, container, patch_url, ".time-settings-status");
-    });
-
     container.find(".setting_emojiset_choice").on("click", function () {
         const data = {emojiset: $(this).val()};
-        const current_emojiset = user_settings.emojiset;
+        const current_emojiset = settings_object.emojiset;
         if (current_emojiset === data.emojiset) {
             return;
         }
@@ -161,7 +146,7 @@ export function set_up() {
         loading.make_indicator(spinner, {text: settings_ui.strings.saving});
 
         channel.patch({
-            url: patch_url,
+            url: "/json/settings",
             data,
             success() {},
             error(xhr) {
@@ -173,28 +158,22 @@ export function set_up() {
             },
         });
     });
-
-    container.find(".translate_emoticons").on("change", function () {
-        const data = {translate_emoticons: JSON.stringify(this.checked)};
-        change_display_setting(data, container, patch_url, ".emoji-settings-status");
-    });
 }
 
-export async function report_emojiset_change() {
+export async function report_emojiset_change(settings_panel) {
     // TODO: Clean up how this works so we can use
     // change_display_setting.  The challenge is that we don't want to
     // report success before the server_events request returns that
     // causes the actual sprite sheet to change.  The current
     // implementation is wrong, though, in that it displays the UI
     // update in all active browser windows.
+    await emojisets.select(settings_panel.settings_object.emojiset);
 
-    await emojisets.select(user_settings.emojiset);
-
-    const spinner = $("#user-display-settings").find(".emoji-settings-status");
+    const spinner = $(settings_panel.container).find(".emoji-settings-status");
     if (spinner.length) {
         loading.destroy_indicator(spinner);
         ui_report.success(
-            $t_html({defaultMessage: "Emojiset changed successfully!"}),
+            $t_html({defaultMessage: "Emoji set changed successfully!"}),
             spinner.expectOne(),
         );
         spinner.expectOne();
@@ -202,22 +181,29 @@ export async function report_emojiset_change() {
     }
 }
 
-export function update_page() {
-    const container = $("#user-display-settings");
-    container.find(".left_side_userlist").prop("checked", user_settings.left_side_userlist);
+export function update_page(settings_panel) {
+    const default_language_name = user_default_language_name;
+    const container = $(settings_panel.container);
+    const settings_object = settings_panel.settings_object;
+
+    container.find(".left_side_userlist").prop("checked", settings_object.left_side_userlist);
     container.find(".default_language_name").text(default_language_name);
-    container.find(".translate_emoticons").prop("checked", user_settings.translate_emoticons);
+    container.find(".translate_emoticons").prop("checked", settings_object.translate_emoticons);
     container
         .find(".setting_twenty_four_hour_time")
-        .val(JSON.stringify(user_settings.twenty_four_hour_time));
-    container.find(".setting_color_scheme").val(JSON.stringify(user_settings.color_scheme));
-    container.find(".setting_default_view").val(user_settings.default_view);
+        .val(JSON.stringify(settings_object.twenty_four_hour_time));
+    container.find(".setting_color_scheme").val(JSON.stringify(settings_object.color_scheme));
+    container.find(".setting_default_view").val(settings_object.default_view);
 
-    // TODO: Set emojiset selector here.
+    // TODO: Set emoji set selector here.
     // Longer term, we'll want to automate this function
 }
 
 export function initialize() {
-    const language_name = get_language_name(user_settings.default_language);
-    set_default_language_name(language_name);
+    const user_language_name = get_language_name(user_settings.default_language);
+    set_default_language_name(user_language_name);
+
+    user_settings_panel.container = "#user-display-settings";
+    user_settings_panel.settings_object = user_settings;
+    user_settings_panel.for_realm_settings = false;
 }
