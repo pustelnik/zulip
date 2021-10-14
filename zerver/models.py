@@ -223,7 +223,7 @@ class Realm(models.Model):
         "OpenID Connect",
     ]
     SUBDOMAIN_FOR_ROOT_DOMAIN = ""
-    WILDCARD_MENTION_THRESHOLD = 15
+    WILDCARD_MENTION_THRESHOLD = 100
 
     id: int = models.AutoField(auto_created=True, primary_key=True, verbose_name="ID")
 
