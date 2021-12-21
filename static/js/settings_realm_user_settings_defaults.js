@@ -26,12 +26,27 @@ export function update_page(property) {
         return;
     }
     const container = $(realm_default_settings_panel.container);
-    const value = realm_user_settings_defaults[property];
+    let value = realm_user_settings_defaults[property];
 
+    // settings_org.set_input_element_value doesn't support radio
+    // button widgets like this one.
     if (property === "emojiset") {
         container.find(`input[value=${CSS.escape(value)}]`).prop("checked", true);
         return;
     }
+
+    if (property === "email_notifications_batching_period_seconds") {
+        settings_notifications.set_notification_batching_ui(container, value);
+        return;
+    }
+
+    // The twenty_four_hour_time setting is represented as a boolean
+    // in the API, but a dropdown with "true"/"false" as strings in
+    // the UI, so we need to convert its format here.
+    if (property === "twenty_four_hour_time") {
+        value = value.toString();
+    }
+
     const input_elem = container.find(`[name=${CSS.escape(property)}]`);
     settings_org.set_input_element_value(input_elem, value);
 }

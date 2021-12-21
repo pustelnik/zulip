@@ -13,6 +13,7 @@ import * as compose_pm_pill from "./compose_pm_pill";
 import * as compose_state from "./compose_state";
 import * as compose_ui from "./compose_ui";
 import * as compose_validate from "./compose_validate";
+import {get_keydown_hotkey} from "./hotkey";
 import {$t} from "./i18n";
 import * as message_store from "./message_store";
 import * as muted_users from "./muted_users";
@@ -118,7 +119,7 @@ function get_slash_matcher(query) {
     query = typeahead.clean_query_lowercase(query);
 
     return function (item) {
-        return typeahead.query_matches_source_attrs(query, item, ["name"], " ");
+        return typeahead.query_matches_source_attrs(query, item, ["name", "aliases"], " ");
     };
 }
 
@@ -226,6 +227,7 @@ function handle_keydown(e) {
                     // typing a next message!
                     $("#compose-send-button").trigger("focus");
                     e.preventDefault();
+                    e.stopPropagation();
                 }
             } else {
                 // Enter
@@ -393,40 +395,39 @@ function should_show_custom_query(query, items) {
 
 export const slash_commands = [
     {
-        text: $t({defaultMessage: "/dark (Toggle night mode)"}),
+        text: $t({defaultMessage: "/dark (Switch to the dark theme)"}),
         name: "dark",
-    },
-    {
-        text: $t({defaultMessage: "/day (Toggle day mode)"}),
-        name: "day",
+        aliases: "night",
     },
     {
         text: $t({defaultMessage: "/fixed-width (Toggle fixed width mode)"}),
         name: "fixed-width",
+        aliases: "",
     },
     {
         text: $t({defaultMessage: "/fluid-width (Toggle fluid width mode)"}),
         name: "fluid-width",
+        aliases: "",
     },
     {
-        text: $t({defaultMessage: "/light (Toggle day mode)"}),
+        text: $t({defaultMessage: "/light (Switch to light theme)"}),
         name: "light",
+        aliases: "day",
     },
     {
         text: $t({defaultMessage: "/me is excited (Display action text)"}),
         name: "me",
-    },
-    {
-        text: $t({defaultMessage: "/night (Toggle night mode)"}),
-        name: "night",
+        aliases: "",
     },
     {
         text: $t({defaultMessage: "/poll Where should we go to lunch today? (Create a poll)"}),
         name: "poll",
+        aliases: "",
     },
     {
         text: $t({defaultMessage: "/todo (Create a todo list)"}),
         name: "todo",
+        aliases: "",
     },
 ];
 
@@ -767,7 +768,7 @@ export function content_highlighter(item) {
     }
 }
 
-const show_flatpickr = (element, callback, default_timestamp) => {
+export function show_flatpickr(element, callback, default_timestamp, options = {}) {
     const flatpickr_input = $("<input id='#timestamp_flatpickr'>");
 
     const instance = flatpickr_input.flatpickr({
@@ -775,15 +776,77 @@ const show_flatpickr = (element, callback, default_timestamp) => {
         enableTime: true,
         clickOpens: false,
         defaultDate: default_timestamp,
-        plugins: [new ConfirmDatePlugin({})],
+        plugins: [
+            new ConfirmDatePlugin({
+                showAlways: true,
+                confirmText: $t({defaultMessage: "Confirm"}),
+                confirmIcon: "",
+            }),
+        ],
         positionElement: element,
         dateFormat: "Z",
         formatDate: (date) => formatISO(date),
+        disableMobile: true,
+        onKeyDown: (selectedDates, dateStr, instance, event) => {
+            const hotkey = get_keydown_hotkey(event);
+
+            if (["tab", "shift_tab"].includes(hotkey.name)) {
+                const elems = [
+                    instance.selectedDateElem,
+                    instance.hourElement,
+                    instance.minuteElement,
+                    instance.amPM,
+                    $(".flatpickr-confirm")[0],
+                ];
+                const i = elems.indexOf(event.target);
+                const n = elems.length;
+                const remain = (i + (event.shiftKey ? -1 : 1)) % n;
+                const target = elems[Math.floor(remain >= 0 ? remain : remain + n)];
+                event.preventDefault();
+                event.stopPropagation();
+                target.focus();
+            }
+
+            event.stopPropagation();
+        },
+        ...options,
     });
+
     const container = $($(instance.innerContainer).parent());
-    container.on("click", ".flatpickr-calendar", (e) => {
+
+    container.on("keydown", (e) => {
+        const hotkey = get_keydown_hotkey(e);
+
+        if (!hotkey) {
+            return false;
+        }
+
+        if (hotkey.name === "enter") {
+            if (e.target.classList[0] === "flatpickr-day") {
+                return true; // use flatpickr default implementation
+            }
+            $(element).toggleClass("has_popover");
+            container.find(".flatpickr-confirm").trigger("click");
+        }
+
+        if (hotkey.name === "escape") {
+            $(element).toggleClass("has_popover");
+            instance.close();
+            instance.destroy();
+        }
+
+        if (["tab", "shift_tab"].includes(hotkey.name)) {
+            return true; // use flatpickr default implementation
+        }
+
+        if (["right_arrow", "up_arrow", "left_arrow", "down_arrow"].includes(hotkey.name)) {
+            return true; // use flatpickr default implementation
+        }
+
         e.stopPropagation();
         e.preventDefault();
+
+        return true;
     });
 
     container.on("click", ".flatpickr-confirm", () => {
@@ -792,8 +855,10 @@ const show_flatpickr = (element, callback, default_timestamp) => {
         instance.destroy();
     });
     instance.open();
-    container.find(".flatpickr-monthDropdown-months").trigger("focus");
-};
+    instance.selectedDateElem.focus();
+
+    return instance;
+}
 
 export function content_typeahead_selected(item, event) {
     const pieces = split_at_cursor(this.query, this.$element);
@@ -1092,9 +1157,10 @@ export function initialize() {
     $("form#send_message_form").on("keydown", handle_keydown);
     $("form#send_message_form").on("keyup", handle_keyup);
 
-    $("#enter_sends").on("click", () => {
-        user_settings.enter_sends = $("#enter_sends").is(":checked");
-        compose.toggle_enter_sends_ui();
+    $(".enter_sends").on("click", () => {
+        user_settings.enter_sends = !user_settings.enter_sends;
+        $(`.enter_sends_${!user_settings.enter_sends}`).hide();
+        $(`.enter_sends_${user_settings.enter_sends}`).show();
 
         // Refocus in the content box so you can continue typing or
         // press Enter to send.
@@ -1106,10 +1172,6 @@ export function initialize() {
             data: {enter_sends: user_settings.enter_sends},
         });
     });
-    $("#enter_sends").prop("checked", user_settings.enter_sends);
-    if (user_settings.enter_sends) {
-        $("#compose-send-button").hide();
-    }
 
     // limit number of items so the list doesn't fall off the screen
     $("#stream_message_recipient_stream").typeahead({

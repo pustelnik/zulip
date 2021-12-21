@@ -154,12 +154,26 @@ const emoji_list = Array.from(emojis_by_name.values(), (emoji_dict) => {
 
 const me_slash = {
     name: "me",
+    aliases: "",
     text: "translated: /me is excited (Display action text)",
 };
 
 const my_slash = {
     name: "my",
+    aliases: "",
     text: "translated: /my (Test)",
+};
+
+const dark_slash = {
+    name: "dark",
+    aliases: "night",
+    text: "translated: /dark (Switch to the dark theme)",
+};
+
+const light_slash = {
+    name: "light",
+    aliases: "day",
+    text: "translated: /light (Switch to light theme)",
 };
 
 const sweden_stream = {
@@ -485,6 +499,30 @@ test("content_typeahead_selected", ({override}) => {
     expected_value = "/me ";
     assert.equal(actual_value, expected_value);
 
+    fake_this.query = "/da";
+    fake_this.completing = "slash";
+    actual_value = ct.content_typeahead_selected.call(fake_this, dark_slash);
+    expected_value = "/dark ";
+    assert.equal(actual_value, expected_value);
+
+    fake_this.query = "/ni";
+    fake_this.completing = "slash";
+    actual_value = ct.content_typeahead_selected.call(fake_this, dark_slash);
+    expected_value = "/dark ";
+    assert.equal(actual_value, expected_value);
+
+    fake_this.query = "/li";
+    fake_this.completing = "slash";
+    actual_value = ct.content_typeahead_selected.call(fake_this, light_slash);
+    expected_value = "/light ";
+    assert.equal(actual_value, expected_value);
+
+    fake_this.query = "/da";
+    fake_this.completing = "slash";
+    actual_value = ct.content_typeahead_selected.call(fake_this, light_slash);
+    expected_value = "/light ";
+    assert.equal(actual_value, expected_value);
+
     // stream
     fake_this.completing = "stream";
     let warned_for_stream_link = false;
@@ -794,7 +832,7 @@ test("initialize", ({override, mock_template}) => {
         // Adds a `no break-space` at the end. This should fail
         // if there wasn't any logic replacing `no break-space`
         // with normal space.
-        query = "cordelia, lear's" + String.fromCharCode(160);
+        query = "cordelia, lear's\u00A0";
         assert.equal(matcher(query, cordelia), true);
         assert.equal(matcher(query, othello), false);
 
@@ -879,7 +917,7 @@ test("initialize", ({override, mock_template}) => {
         actual_value = options.highlighter.call(fake_this, othello);
         expected_value =
             `        <span class="user_circle_empty user_circle"></span>\n` +
-            `        <img class="typeahead-image" src="/avatar/${othello.user_id}&amp;s&#x3D;50" />\n` +
+            `        <img class="typeahead-image" src="http://zulip.zulipdev.com/avatar/${othello.user_id}?s&#x3D;50" />\n` +
             `<strong>Othello, the Moor of Venice</strong>&nbsp;&nbsp;\n` +
             `<small class="autocomplete_secondary">othello@zulip.com</small>\n`;
         assert.equal(actual_value, expected_value);
@@ -948,6 +986,11 @@ test("initialize", ({override, mock_template}) => {
         expected_value = [me_slash, my_slash];
         assert.deepEqual(actual_value, expected_value);
 
+        fake_this = {completing: "slash", token: "da"};
+        actual_value = sort_items(fake_this, [dark_slash, light_slash]);
+        expected_value = [dark_slash, light_slash];
+        assert.deepEqual(actual_value, expected_value);
+
         fake_this = {completing: "stream", token: "de"};
         actual_value = sort_items(fake_this, [sweden_stream, denmark_stream]);
         expected_value = [denmark_stream, sweden_stream];
@@ -1011,6 +1054,7 @@ test("initialize", ({override, mock_template}) => {
             id: "stream_message_recipient_stream",
         },
         preventDefault: noop,
+        stopPropagation: noop,
     };
 
     $("#stream_message_recipient_topic").data = () => ({typeahead: {shown: true}});
@@ -1100,7 +1144,6 @@ test("initialize", ({override, mock_template}) => {
 
     // select_on_focus()
 
-    override(compose, "toggle_enter_sends_ui", noop);
     let channel_patch_called = false;
     override(channel, "patch", (params) => {
         assert.equal(params.url, "/json/settings");
@@ -1109,20 +1152,22 @@ test("initialize", ({override, mock_template}) => {
 
         channel_patch_called = true;
     });
-    $("#enter_sends").is = () => false;
-    $("#enter_sends").trigger("click");
+    user_settings.enter_sends = false;
+    $(".enter_sends").trigger("click");
+    assert.equal(user_settings.enter_sends, true);
 
     // Now we re-run both .initialize() and the click handler, this time
     // with enter_sends: user_settings.enter_sends being true
-    $("#enter_sends").is = () => true;
-    $("#enter_sends").trigger("click");
+    user_settings.enter_sends = true;
+    $(".enter_sends").trigger("click");
+    assert.equal(user_settings.enter_sends, false);
 
     $("#stream_message_recipient_stream").off("focus");
     $("#stream_message_recipient_topic").off("focus");
     $("#private_message_recipient").off("focus");
     $("form#send_message_form").off("keydown");
     $("form#send_message_form").off("keyup");
-    $("#enter_sends").off("click");
+    $(".enter_sends").off("click");
     $("#private_message_recipient").off("blur");
     ct.initialize();
 
@@ -1520,6 +1565,10 @@ test("typeahead_results", () => {
 
     // Autocomplete by slash commands.
     assert_slash_matches("me", [me_slash]);
+    assert_slash_matches("dark", [dark_slash]);
+    assert_slash_matches("night", [dark_slash]);
+    assert_slash_matches("light", [light_slash]);
+    assert_slash_matches("day", [light_slash]);
 
     // Autocomplete stream by stream name or stream description.
     assert_stream_matches("den", [denmark_stream, sweden_stream]);

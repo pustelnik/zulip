@@ -334,7 +334,7 @@ class TestSupportEndpoint(ZulipTestCase):
             ["Billing method of zulip updated to pay by invoice"], result
         )
 
-    def test_change_plan_type(self) -> None:
+    def test_change_realm_plan_type(self) -> None:
         cordelia = self.example_user("cordelia")
         self.login_user(cordelia)
 
@@ -347,13 +347,22 @@ class TestSupportEndpoint(ZulipTestCase):
         iago = self.example_user("iago")
         self.login_user(iago)
 
-        with mock.patch("analytics.views.support.do_change_plan_type") as m:
+        with mock.patch("analytics.views.support.do_change_realm_plan_type") as m:
             result = self.client_post(
                 "/activity/support", {"realm_id": f"{iago.realm_id}", "plan_type": "2"}
             )
             m.assert_called_once_with(get_realm("zulip"), 2, acting_user=iago)
             self.assert_in_success_response(
                 ["Plan type of zulip changed from self hosted to limited"], result
+            )
+
+        with mock.patch("analytics.views.support.do_change_realm_plan_type") as m:
+            result = self.client_post(
+                "/activity/support", {"realm_id": f"{iago.realm_id}", "plan_type": "10"}
+            )
+            m.assert_called_once_with(get_realm("zulip"), 10, acting_user=iago)
+            self.assert_in_success_response(
+                ["Plan type of zulip changed from self hosted to plus"], result
             )
 
     def test_change_org_type(self) -> None:
@@ -457,7 +466,7 @@ class TestSupportEndpoint(ZulipTestCase):
         )
         self.assert_in_success_response(["Sponsorship approved for lear"], result)
         lear_realm.refresh_from_db()
-        self.assertEqual(lear_realm.plan_type, Realm.STANDARD_FREE)
+        self.assertEqual(lear_realm.plan_type, Realm.PLAN_TYPE_STANDARD_FREE)
         customer = get_customer_by_realm(lear_realm)
         assert customer is not None
         self.assertFalse(customer.sponsorship_pending)

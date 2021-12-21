@@ -33,13 +33,13 @@ mock_esm("../../static/js/stream_popover", {
     hide_topic_popover: noop,
     hide_all_messages_popover: noop,
     hide_starred_messages_popover: noop,
+    hide_drafts_popover: noop,
     hide_streamlist_sidebar: noop,
 });
 
 const people = zrequire("people");
 const user_status = zrequire("user_status");
 const message_edit = zrequire("message_edit");
-const emoji = zrequire("../shared/js/emoji");
 
 // Bypass some scary code that runs when we import the module.
 const popovers = with_field($.fn, "popover", noop, () => zrequire("popovers"));
@@ -52,6 +52,7 @@ const alice = {
     is_guest: false,
     is_admin: false,
     role: 400,
+    date_joined: "2021-11-01T16:32:16.458735+00:00",
 };
 
 const me = {
@@ -111,8 +112,8 @@ function test_ui(label, f) {
 }
 
 test_ui("sender_hover", ({override, mock_template}) => {
+    page_params.is_spectator = false;
     override($.fn, "popover", noop);
-    override(emoji, "get_emoji_details_by_name", noop);
 
     const selection = ".sender_name, .sender_name-in-status, .inline_profile_picture";
     const handler = $("#main_div").get_on_handler("click", selection);
@@ -162,7 +163,7 @@ test_ui("sender_hover", ({override, mock_template}) => {
 
     mock_template("user_info_popover_title.hbs", false, (opts) => {
         assert.deepEqual(opts, {
-            user_avatar: "avatar/alice@example.com",
+            user_avatar: "http://zulip.zulipdev.com/avatar/42?s=50",
             user_is_guest: false,
         });
         return "title-html";
@@ -196,21 +197,19 @@ test_ui("sender_hover", ({override, mock_template}) => {
             status_text: "on the beach",
             status_emoji_info,
             user_mention_syntax: "@**Alice Smith**",
+            date_joined: undefined,
+            spectator_view: false,
+            show_manage_user_option: false,
         });
         return "content-html";
     });
 
     $.create(".user_popover_email", {children: []});
     const image_stubber = make_image_stubber();
-    window.location = {
-        href: "http://chat.zulip.org/",
-    };
-    const base_url = window.location.href;
     handler.call(target, e);
 
     const avatar_img = image_stubber.get(0);
-    const expected_url = new URL("avatar/42/medium?v=" + alice.avatar_version, base_url);
-    assert.equal(avatar_img.src.toString(), expected_url.toString());
+    assert.equal(avatar_img.src.toString(), "/avatar/42/medium");
 
     // todo: load image
 });
@@ -221,12 +220,6 @@ test_ui("actions_popover", ({override, mock_template}) => {
     const target = $.create("click target");
 
     const handler = $("#main_div").get_on_handler("click", ".actions_hover");
-
-    window.location = {
-        protocol: "http:",
-        host: "chat.zulip.org",
-        pathname: "/",
-    };
 
     const message = {
         id: 999,
@@ -265,7 +258,7 @@ test_ui("actions_popover", ({override, mock_template}) => {
         // TODO: Test all the properties of the popover
         assert.equal(
             opts.conversation_time_uri,
-            "http://chat.zulip.org/#narrow/stream/Bracket.20.28.20stream/topic/Actions.20.281.29/near/999",
+            "http://zulip.zulipdev.com/#narrow/stream/Bracket.20.28.20stream/topic/Actions.20.281.29/near/999",
         );
         return "actions-content";
     });

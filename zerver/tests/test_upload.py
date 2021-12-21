@@ -21,7 +21,7 @@ import zerver.lib.upload
 from zerver.lib.actions import (
     do_change_icon_source,
     do_change_logo_source,
-    do_change_plan_type,
+    do_change_realm_plan_type,
     do_create_realm,
     do_delete_old_unclaimed_attachments,
     do_set_realm_property,
@@ -410,7 +410,7 @@ class FileUploadTest(UploadSerializeMixin, ZulipTestCase):
         body = f"Illegal message ...[zulip.txt](http://{host}/user_uploads/" + d1_path_id + ")"
         cordelia = self.example_user("cordelia")
         with self.assertLogs(level="WARNING") as warn_log:
-            self.send_stream_message(cordelia, "Denmark", body, "test")
+            self.send_stream_message(cordelia, "Verona", body, "test")
         self.assertTrue(
             f"WARNING:root:User {cordelia.id} tried to share upload" in warn_log.output[0]
             and "but lacks permission" in warn_log.output[0]
@@ -428,13 +428,14 @@ class FileUploadTest(UploadSerializeMixin, ZulipTestCase):
 
         # Then, have that new recipient user publish it.
         body = f"Third message ...[zulip.txt](http://{host}/user_uploads/" + d1_path_id + ")"
-        self.send_stream_message(self.example_user("othello"), "Denmark", body, "test")
+        self.send_stream_message(self.example_user("othello"), "Verona", body, "test")
         self.assertEqual(Attachment.objects.get(path_id=d1_path_id).messages.count(), 3)
         self.assertTrue(Attachment.objects.get(path_id=d1_path_id).is_realm_public)
         self.assertFalse(Attachment.objects.get(path_id=d1_path_id).is_web_public)
 
         # Finally send to Rome, the web-public stream, and confirm it's now web-public
         body = f"Fourth message ...[zulip.txt](http://{host}/user_uploads/" + d1_path_id + ")"
+        self.subscribe(self.example_user("othello"), "Rome")
         self.send_stream_message(self.example_user("othello"), "Rome", body, "test")
         self.assertEqual(Attachment.objects.get(path_id=d1_path_id).messages.count(), 4)
         self.assertTrue(Attachment.objects.get(path_id=d1_path_id).is_realm_public)
@@ -892,7 +893,7 @@ class AvatarTest(UploadSerializeMixin, ZulipTestCase):
 
         self.assertEqual(
             url,
-            "/user_avatars/5/fc2b9f1a81f4508a4df2d95451a2a77e0524ca0e-medium.png?x=x&version=2",
+            "/user_avatars/5/fc2b9f1a81f4508a4df2d95451a2a77e0524ca0e-medium.png?version=2",
         )
 
         url = get_avatar_field(
@@ -926,8 +927,8 @@ class AvatarTest(UploadSerializeMixin, ZulipTestCase):
         """Verifies URL schemes for avatars and realm icons."""
         backend: ZulipUploadBackend = LocalUploadBackend()
         self.assertEqual(backend.get_public_upload_root_url(), "/user_avatars/")
-        self.assertEqual(backend.get_avatar_url("hash", False), "/user_avatars/hash.png?x=x")
-        self.assertEqual(backend.get_avatar_url("hash", True), "/user_avatars/hash-medium.png?x=x")
+        self.assertEqual(backend.get_avatar_url("hash", False), "/user_avatars/hash.png")
+        self.assertEqual(backend.get_avatar_url("hash", True), "/user_avatars/hash-medium.png")
         self.assertEqual(
             backend.get_realm_icon_url(15, 1), "/user_avatars/15/realm/icon.png?version=1"
         )
@@ -942,11 +943,11 @@ class AvatarTest(UploadSerializeMixin, ZulipTestCase):
         with self.settings(S3_AVATAR_BUCKET="bucket"):
             backend = S3UploadBackend()
             self.assertEqual(
-                backend.get_avatar_url("hash", False), "https://bucket.s3.amazonaws.com/hash?x=x"
+                backend.get_avatar_url("hash", False), "https://bucket.s3.amazonaws.com/hash"
             )
             self.assertEqual(
                 backend.get_avatar_url("hash", True),
-                "https://bucket.s3.amazonaws.com/hash-medium.png?x=x",
+                "https://bucket.s3.amazonaws.com/hash-medium.png",
             )
             self.assertEqual(
                 backend.get_realm_icon_url(15, 1),
@@ -1047,28 +1048,44 @@ class AvatarTest(UploadSerializeMixin, ZulipTestCase):
 
         self.logout()
 
-        # Test /avatar/<email_or_id> endpoint with HTTP basic auth.
-        response = self.api_get(hamlet, "/avatar/cordelia@zulip.com", {"foo": "bar"})
-        redirect_url = response["Location"]
-        self.assertTrue(redirect_url.endswith(str(avatar_url(cordelia)) + "&foo=bar"))
+        with self.settings(WEB_PUBLIC_STREAMS_ENABLED=False):
+            # Test /avatar/<email_or_id> endpoint with HTTP basic auth.
+            response = self.api_get(hamlet, "/avatar/cordelia@zulip.com", {"foo": "bar"})
+            redirect_url = response["Location"]
+            self.assertTrue(redirect_url.endswith(str(avatar_url(cordelia)) + "&foo=bar"))
 
-        response = self.api_get(hamlet, f"/avatar/{cordelia.id}", {"foo": "bar"})
-        redirect_url = response["Location"]
-        self.assertTrue(redirect_url.endswith(str(avatar_url(cordelia)) + "&foo=bar"))
+            response = self.api_get(hamlet, f"/avatar/{cordelia.id}", {"foo": "bar"})
+            redirect_url = response["Location"]
+            self.assertTrue(redirect_url.endswith(str(avatar_url(cordelia)) + "&foo=bar"))
 
-        # Test cross_realm_bot avatar access using email.
-        response = self.api_get(hamlet, "/avatar/welcome-bot@zulip.com", {"foo": "bar"})
-        redirect_url = response["Location"]
-        self.assertTrue(redirect_url.endswith(str(avatar_url(cross_realm_bot)) + "&foo=bar"))
+            # Test cross_realm_bot avatar access using email.
+            response = self.api_get(hamlet, "/avatar/welcome-bot@zulip.com", {"foo": "bar"})
+            redirect_url = response["Location"]
+            self.assertTrue(redirect_url.endswith(str(avatar_url(cross_realm_bot)) + "&foo=bar"))
 
-        # Test cross_realm_bot avatar access using id.
-        response = self.api_get(hamlet, f"/avatar/{cross_realm_bot.id}", {"foo": "bar"})
-        redirect_url = response["Location"]
-        self.assertTrue(redirect_url.endswith(str(avatar_url(cross_realm_bot)) + "&foo=bar"))
+            # Test cross_realm_bot avatar access using id.
+            response = self.api_get(hamlet, f"/avatar/{cross_realm_bot.id}", {"foo": "bar"})
+            redirect_url = response["Location"]
+            self.assertTrue(redirect_url.endswith(str(avatar_url(cross_realm_bot)) + "&foo=bar"))
 
+            # Without spectators enabled, no unauthenticated access.
+            response = self.client_get("/avatar/cordelia@zulip.com", {"foo": "bar"})
+            self.assert_json_error(
+                response,
+                "Not logged in: API authentication or user session required",
+                status_code=401,
+            )
+
+        # Allow unauthenticated/spectator requests by ID.
+        response = self.client_get(f"/avatar/{cordelia.id}", {"foo": "bar"})
+        self.assertEqual(302, response.status_code)
+
+        # Disallow unauthenticated/spectator requests by email.
         response = self.client_get("/avatar/cordelia@zulip.com", {"foo": "bar"})
         self.assert_json_error(
-            response, "Not logged in: API authentication or user session required", status_code=401
+            response,
+            "Not logged in: API authentication or user session required",
+            status_code=401,
         )
 
     def test_get_user_avatar_medium(self) -> None:
@@ -1090,18 +1107,34 @@ class AvatarTest(UploadSerializeMixin, ZulipTestCase):
 
         self.logout()
 
-        # Test /avatar/<email_or_id>/medium endpoint with HTTP basic auth.
-        response = self.api_get(hamlet, "/avatar/cordelia@zulip.com/medium", {"foo": "bar"})
-        redirect_url = response["Location"]
-        self.assertTrue(redirect_url.endswith(str(avatar_url(cordelia, True)) + "&foo=bar"))
+        with self.settings(WEB_PUBLIC_STREAMS_ENABLED=False):
+            # Test /avatar/<email_or_id>/medium endpoint with HTTP basic auth.
+            response = self.api_get(hamlet, "/avatar/cordelia@zulip.com/medium", {"foo": "bar"})
+            redirect_url = response["Location"]
+            self.assertTrue(redirect_url.endswith(str(avatar_url(cordelia, True)) + "&foo=bar"))
 
-        response = self.api_get(hamlet, f"/avatar/{cordelia.id}/medium", {"foo": "bar"})
-        redirect_url = response["Location"]
-        self.assertTrue(redirect_url.endswith(str(avatar_url(cordelia, True)) + "&foo=bar"))
+            response = self.api_get(hamlet, f"/avatar/{cordelia.id}/medium", {"foo": "bar"})
+            redirect_url = response["Location"]
+            self.assertTrue(redirect_url.endswith(str(avatar_url(cordelia, True)) + "&foo=bar"))
 
+            # Without spectators enabled, no unauthenticated access.
+            response = self.client_get("/avatar/cordelia@zulip.com/medium", {"foo": "bar"})
+            self.assert_json_error(
+                response,
+                "Not logged in: API authentication or user session required",
+                status_code=401,
+            )
+
+        # Allow unauthenticated/spectator requests by ID.
+        response = self.client_get(f"/avatar/{cordelia.id}/medium", {"foo": "bar"})
+        self.assertEqual(302, response.status_code)
+
+        # Disallow unauthenticated/spectator requests by email.
         response = self.client_get("/avatar/cordelia@zulip.com/medium", {"foo": "bar"})
         self.assert_json_error(
-            response, "Not logged in: API authentication or user session required", status_code=401
+            response,
+            "Not logged in: API authentication or user session required",
+            status_code=401,
         )
 
     def test_non_valid_user_avatar(self) -> None:
@@ -1512,7 +1545,7 @@ class RealmLogoTest(UploadSerializeMixin, ZulipTestCase):
 
     def test_upload_limited_plan_type(self) -> None:
         user_profile = self.example_user("iago")
-        do_change_plan_type(user_profile.realm, Realm.LIMITED, acting_user=None)
+        do_change_realm_plan_type(user_profile.realm, Realm.PLAN_TYPE_LIMITED, acting_user=None)
         self.login_user(user_profile)
         with get_test_image_file(self.correct_files[0][0]) as fp:
             result = self.client_post(
@@ -1556,7 +1589,7 @@ class RealmLogoTest(UploadSerializeMixin, ZulipTestCase):
             f"/user_avatars/{realm.id}/realm/{file_name}?version=2&night={is_night_str}",
         )
 
-        do_change_plan_type(realm, Realm.LIMITED, acting_user=user_profile)
+        do_change_realm_plan_type(realm, Realm.PLAN_TYPE_LIMITED, acting_user=user_profile)
         if self.night:
             self.assertEqual(realm.night_logo_source, Realm.LOGO_UPLOADED)
         else:
@@ -1657,7 +1690,7 @@ class RealmLogoTest(UploadSerializeMixin, ZulipTestCase):
 
 
 class RealmNightLogoTest(RealmLogoTest):
-    # Run the same tests as for RealmLogoTest, just with night mode enabled
+    # Run the same tests as for RealmLogoTest, just with dark theme enabled
     night = True
 
 
@@ -1739,13 +1772,6 @@ class LocalStorageTest(UploadSerializeMixin, ZulipTestCase):
         with get_test_image_file("img.png") as image_file:
             upload_emoji_image(image_file, file_name, user_profile)
         url = zerver.lib.upload.upload_backend.get_emoji_url(file_name, user_profile.realm_id)
-
-        # Verify the assert statement for trying to fetch the still
-        # version of a non-GIF image, since we only support animated GIFs.
-        with self.assertRaises(AssertionError):
-            still_url = zerver.lib.upload.upload_backend.get_emoji_url(
-                file_name, user_profile.realm_id, still=True
-            )
 
         emoji_path = RealmEmoji.PATH_ID_TEMPLATE.format(
             realm_id=user_profile.realm_id,

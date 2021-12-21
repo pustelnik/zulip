@@ -3,13 +3,11 @@
 const {strict: assert} = require("assert");
 
 const {$t_html} = require("../zjsunit/i18n");
-const {mock_esm, set_global, zrequire} = require("../zjsunit/namespace");
+const {mock_esm, zrequire} = require("../zjsunit/namespace");
 const {run_test} = require("../zjsunit/test");
 const blueslip = require("../zjsunit/zblueslip");
 const $ = require("../zjsunit/zjquery");
 const {page_params} = require("../zjsunit/zpage_params");
-
-set_global("document", {location: {}});
 
 const channel = mock_esm("../../static/js/channel");
 const compose_actions = mock_esm("../../static/js/compose_actions");
@@ -130,7 +128,7 @@ test_ui("validate", ({override, mock_template}) => {
 
         $("#compose-send-button").prop("disabled", false);
         $("#compose-send-button").trigger("focus");
-        $("#sending-indicator").hide();
+        $("#compose-send-button .loader").hide();
 
         const pm_pill_container = $.create("fake-pm-pill-container");
         $("#private_message_recipient")[0] = {};
@@ -153,7 +151,7 @@ test_ui("validate", ({override, mock_template}) => {
 
     initialize_pm_pill();
     assert.ok(!compose_validate.validate());
-    assert.ok(!$("#sending-indicator").visible());
+    assert.ok(!$("#compose-send-button .loader").visible());
     assert.equal($("#compose-send-button").prop("disabled"), false);
     assert.equal(
         $("#compose-error-msg").html(),

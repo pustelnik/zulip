@@ -138,6 +138,7 @@ def update_realm(
         str_validator=check_capped_string(Realm.MAX_REALM_SUBDOMAIN_LENGTH),
         default=None,
     ),
+    enable_spectator_access: Optional[bool] = REQ(json_validator=check_bool, default=None),
 ) -> HttpResponse:
     realm = user_profile.realm
 
@@ -315,7 +316,7 @@ def check_subdomain_available(request: HttpRequest, subdomain: str) -> HttpRespo
 
 def realm_reactivation(request: HttpRequest, confirmation_key: str) -> HttpResponse:
     try:
-        realm = get_object_from_key(confirmation_key, Confirmation.REALM_REACTIVATION)
+        realm = get_object_from_key(confirmation_key, [Confirmation.REALM_REACTIVATION])
     except ConfirmationKeyException:
         return render(request, "zerver/realm_reactivation_link_error.html")
     do_reactivate_realm(realm)
@@ -343,6 +344,7 @@ def update_realm_user_settings_defaults(
     default_view: Optional[str] = REQ(
         str_validator=check_string_in(default_view_options), default=None
     ),
+    escape_navigates_to_default_view: Optional[bool] = REQ(json_validator=check_bool, default=None),
     left_side_userlist: Optional[bool] = REQ(json_validator=check_bool, default=None),
     emojiset: Optional[str] = REQ(str_validator=check_string_in(emojiset_choices), default=None),
     demote_inactive_streams: Optional[int] = REQ(

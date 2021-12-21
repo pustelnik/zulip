@@ -265,9 +265,10 @@ class CommonUtils {
     }
 
     async ensure_enter_does_not_send(page: Page): Promise<void> {
-        await page.$eval("#enter_sends", (el) => {
-            if ((el as HTMLInputElement).checked) {
-                (el as HTMLInputElement).click();
+        await page.$eval(".enter_sends_false", (el) => {
+            if ((el as HTMLElement).style.display !== "none") {
+                // Click events gets propagated to `.enter_sends` which toggles the value.
+                (el as HTMLElement).click();
             }
         });
     }
@@ -494,6 +495,16 @@ class CommonUtils {
         await page.waitForFunction(
             () => document.querySelector(".overlay.show")?.getAttribute("style") === null,
         );
+    }
+
+    async wait_for_micromodal_to_open(page: Page): Promise<void> {
+        // We manually add the `modal--open` class to the modal after the modal animation completes.
+        await page.waitForFunction(() => document.querySelector(".modal--open") !== null);
+    }
+
+    async wait_for_micromodal_to_close(page: Page): Promise<void> {
+        // This function will ensure that the mouse events are enabled for the background for further tests.
+        await page.waitForFunction(() => document.querySelector(".modal--open") === null);
     }
 
     async run_test_async(test_function: (page: Page) => Promise<void>): Promise<void> {
