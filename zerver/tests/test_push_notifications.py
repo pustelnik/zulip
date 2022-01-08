@@ -90,7 +90,7 @@ if settings.ZILENCER_ENABLED:
 @skipUnless(settings.ZILENCER_ENABLED, "requires zilencer")
 class BouncerTestCase(ZulipTestCase):
     def setUp(self) -> None:
-        self.server_uuid = "1234-abcd"
+        self.server_uuid = "6cde5f7a-1f7e-4978-9716-49f69ebfc9fe"
         server = RemoteZulipServer(
             uuid=self.server_uuid,
             api_key="magic_secret_api_key",
@@ -234,12 +234,29 @@ class PushBouncerNotificationTest(BouncerTestCase):
             self.server_uuid, endpoint, dict(user_id=user_id, token_kind=token_kind, token=token)
         )
         self.assert_json_error(
-            result, "Zulip server auth failure: key does not match role 1234-abcd", status_code=401
+            result,
+            "Zulip server auth failure: key does not match role 6cde5f7a-1f7e-4978-9716-49f69ebfc9fe",
+            status_code=401,
         )
 
         del self.API_KEYS[self.server_uuid]
 
-        credentials = "{}:{}".format("5678-efgh", "invalid")
+        self.API_KEYS["invalid_uuid"] = "invalid"
+        result = self.uuid_post(
+            "invalid_uuid",
+            endpoint,
+            dict(user_id=user_id, token_kind=token_kind, token=token),
+            subdomain="zulip",
+        )
+        self.assert_json_error(
+            result,
+            "Zulip server auth failure: invalid_uuid is not registered -- did you run `manage.py register_server`?",
+            status_code=401,
+        )
+        del self.API_KEYS["invalid_uuid"]
+
+        credentials_uuid = str(uuid.uuid4())
+        credentials = "{}:{}".format(credentials_uuid, "invalid")
         api_auth = "Basic " + base64.b64encode(credentials.encode()).decode()
         result = self.client_post(
             endpoint,
@@ -248,7 +265,7 @@ class PushBouncerNotificationTest(BouncerTestCase):
         )
         self.assert_json_error(
             result,
-            "Zulip server auth failure: 5678-efgh is not registered -- did you run `manage.py register_server`?",
+            f"Zulip server auth failure: {credentials_uuid} is not registered -- did you run `manage.py register_server`?",
             status_code=401,
         )
 
@@ -299,7 +316,10 @@ class PushBouncerNotificationTest(BouncerTestCase):
         payload = {
             "user_id": hamlet.id,
             "gcm_payload": {"event": "remove", "zulip_message_ids": many_ids},
-            "apns_payload": {"event": "remove", "zulip_message_ids": many_ids},
+            "apns_payload": {
+                "badge": 0,
+                "custom": {"zulip": {"event": "remove", "zulip_message_ids": many_ids}},
+            },
             "gcm_options": {},
         }
         with mock.patch(
@@ -325,14 +345,22 @@ class PushBouncerNotificationTest(BouncerTestCase):
             logger.output,
             [
                 "INFO:zilencer.views:"
-                f"Sending mobile push notifications for remote user 1234-abcd:{hamlet.id}: "
+                f"Sending mobile push notifications for remote user 6cde5f7a-1f7e-4978-9716-49f69ebfc9fe:{hamlet.id}: "
                 "2 via FCM devices, 1 via APNs devices"
             ],
         )
         apple_push.assert_called_once_with(
             hamlet.id,
             [apple_token],
-            {"event": "remove", "zulip_message_ids": ",".join(str(i) for i in range(50, 250))},
+            {
+                "badge": 0,
+                "custom": {
+                    "zulip": {
+                        "event": "remove",
+                        "zulip_message_ids": ",".join(str(i) for i in range(50, 250)),
+                    }
+                },
+            },
             remote=server,
         )
         android_push.assert_called_once_with(
@@ -673,7 +701,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
             self.assertEqual(
                 warn_log.output,
                 [
-                    "WARNING:root:Invalid data saving zilencer_remoteinstallationcount for server demo.example.com/1234-abcd"
+                    "WARNING:root:Invalid data saving zilencer_remoteinstallationcount for server demo.example.com/6cde5f7a-1f7e-4978-9716-49f69ebfc9fe"
                 ],
             )
 
@@ -784,7 +812,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         send_analytics_to_remote_server()
         remote_log_entry = RemoteRealmAuditLog.objects.order_by("id").last()
         assert remote_log_entry is not None
-        self.assertEqual(remote_log_entry.server.uuid, self.server_uuid)
+        self.assertEqual(str(remote_log_entry.server.uuid), self.server_uuid)
         self.assertEqual(remote_log_entry.remote_id, log_entry.id)
         self.assertEqual(remote_log_entry.event_time, self.TIME_ZERO)
         self.assertEqual(remote_log_entry.backfilled, True)
@@ -921,7 +949,7 @@ class HandlePushNotificationTest(PushNotificationTest):
                 views_logger.output,
                 [
                     "INFO:zilencer.views:"
-                    f"Sending mobile push notifications for remote user 1234-abcd:{self.user_profile.id}: "
+                    f"Sending mobile push notifications for remote user 6cde5f7a-1f7e-4978-9716-49f69ebfc9fe:{self.user_profile.id}: "
                     f"{len(gcm_devices)} via FCM devices, {len(apns_devices)} via APNs devices"
                 ],
             )
@@ -982,7 +1010,7 @@ class HandlePushNotificationTest(PushNotificationTest):
                 views_logger.output,
                 [
                     "INFO:zilencer.views:"
-                    f"Sending mobile push notifications for remote user 1234-abcd:{self.user_profile.id}: "
+                    f"Sending mobile push notifications for remote user 6cde5f7a-1f7e-4978-9716-49f69ebfc9fe:{self.user_profile.id}: "
                     f"{len(gcm_devices)} via FCM devices, {len(apns_devices)} via APNs devices"
                 ],
             )
@@ -2454,6 +2482,26 @@ class PushBouncerSignupTest(ZulipTestCase):
         )
         result = self.client_post("/api/v1/remotes/server/register", request)
         self.assert_json_error(result, "Enter a valid email address.")
+
+    def test_push_signup_invalid_zulip_org_id(self) -> None:
+        zulip_org_id = "x" * RemoteZulipServer.UUID_LENGTH
+        zulip_org_key = get_random_string(64)
+        request = dict(
+            zulip_org_id=zulip_org_id,
+            zulip_org_key=zulip_org_key,
+            hostname="example.com",
+            contact_email="server-admin@example.com",
+        )
+        result = self.client_post("/api/v1/remotes/server/register", request)
+        self.assert_json_error(result, "Invalid UUID")
+
+        # This looks mostly like a proper UUID, but isn't actually a valid UUIDv4,
+        # which makes it slip past a basic validation via initializing uuid.UUID with it.
+        # Thus we should test this scenario separately.
+        zulip_org_id = "18cedb98-5222-5f34-50a9-fc418e1ba972"
+        request["zulip_org_id"] = zulip_org_id
+        result = self.client_post("/api/v1/remotes/server/register", request)
+        self.assert_json_error(result, "Invalid UUID")
 
     def test_push_signup_success(self) -> None:
         zulip_org_id = str(uuid.uuid4())

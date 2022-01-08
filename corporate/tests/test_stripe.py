@@ -4,6 +4,7 @@ import os
 import random
 import re
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -38,6 +39,7 @@ from corporate.lib.stripe import (
     customer_has_credit_card_as_default_payment_method,
     do_change_remote_server_plan_type,
     do_create_stripe_customer,
+    do_deactivate_remote_server,
     downgrade_small_realms_behind_on_payments_as_needed,
     get_discount_for_realm,
     get_latest_seat_count,
@@ -4109,9 +4111,12 @@ class RequiresBillingAccessTest(StripeTestCase):
 
         # Make sure that we are testing all the JSON endpoints
         # Quite a hack, but probably fine for now
-        string_with_all_endpoints = str(get_resolver("corporate.urls").reverse_dict)
+        reverse_dict = get_resolver("corporate.urls").reverse_dict
         json_endpoints = {
-            word.strip("\"'()[],$") for word in string_with_all_endpoints.split() if "json/" in word
+            pat
+            for name in reverse_dict
+            for matches, pat, defaults, converters in reverse_dict.getlist(name)
+            if pat.startswith(re.escape("json/"))
         }
         self.assert_length(json_endpoints, len(tested_endpoints))
 
@@ -4421,7 +4426,7 @@ class BillingHelpersTest(ZulipTestCase):
         self.assertTrue(is_sponsored_realm(realm))
 
     def test_change_remote_server_plan_type(self) -> None:
-        server_uuid = "demo-1234"
+        server_uuid = str(uuid.uuid4())
         remote_server = RemoteZulipServer.objects.create(
             uuid=server_uuid,
             api_key="magic_secret_api_key",
@@ -4443,6 +4448,36 @@ class BillingHelpersTest(ZulipTestCase):
         }
         self.assertEqual(remote_realm_audit_log.extra_data, str(expected_extra_data))
         self.assertEqual(remote_server.plan_type, RemoteZulipServer.PLAN_TYPE_STANDARD)
+
+    def test_deactivate_remote_server(self) -> None:
+        server_uuid = str(uuid.uuid4())
+        remote_server = RemoteZulipServer.objects.create(
+            uuid=server_uuid,
+            api_key="magic_secret_api_key",
+            hostname="demo.example.com",
+            contact_email="email@example.com",
+        )
+        self.assertFalse(remote_server.deactivated)
+
+        do_deactivate_remote_server(remote_server)
+
+        remote_server = RemoteZulipServer.objects.get(uuid=server_uuid)
+        remote_realm_audit_log = RemoteZulipServerAuditLog.objects.filter(
+            event_type=RealmAuditLog.REMOTE_SERVER_DEACTIVATED
+        ).last()
+        assert remote_realm_audit_log is not None
+        self.assertTrue(remote_server.deactivated)
+
+        # Try to deactivate a remote server that is already deactivated
+        with self.assertLogs("corporate.stripe", "WARN") as warning_log:
+            do_deactivate_remote_server(remote_server)
+            self.assertEqual(
+                warning_log.output,
+                [
+                    "WARNING:corporate.stripe:Cannot deactivate remote server with ID "
+                    f"{remote_server.id}, server has already been deactivated."
+                ],
+            )
 
 
 class LicenseLedgerTest(StripeTestCase):

@@ -1,7 +1,9 @@
 import datetime
 from typing import List, Tuple
+from uuid import UUID
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from analytics.models import BaseCount
@@ -11,7 +13,10 @@ from zerver.models import AbstractPushDeviceToken, AbstractRealmAuditLog
 
 
 def get_remote_server_by_uuid(uuid: str) -> "RemoteZulipServer":
-    return RemoteZulipServer.objects.get(uuid=uuid)
+    try:
+        return RemoteZulipServer.objects.get(uuid=uuid)
+    except ValidationError:
+        raise RemoteZulipServer.DoesNotExist()
 
 
 class RemoteZulipServer(models.Model):
@@ -26,7 +31,7 @@ class RemoteZulipServer(models.Model):
 
     # The unique UUID (`zulip_org_id`) and API key (`zulip_org_key`)
     # for this remote server registration.
-    uuid: str = models.CharField(max_length=UUID_LENGTH, unique=True)
+    uuid: UUID = models.UUIDField(unique=True)
     api_key: str = models.CharField(max_length=API_KEY_LENGTH)
 
     # The hostname and contact details are not verified/trusted. Thus,
@@ -36,6 +41,9 @@ class RemoteZulipServer(models.Model):
     contact_email: str = models.EmailField(blank=True, null=False)
     last_updated: datetime.datetime = models.DateTimeField("last updated", auto_now=True)
 
+    # Whether the server registration has been deactivated.
+    deactivated: bool = models.BooleanField(default=False)
+
     # Plan types for self-hosted customers
     PLAN_TYPE_SELF_HOSTED = 1
     PLAN_TYPE_STANDARD = 102
@@ -44,10 +52,10 @@ class RemoteZulipServer(models.Model):
     plan_type: int = models.PositiveSmallIntegerField(default=PLAN_TYPE_SELF_HOSTED)
 
     def __str__(self) -> str:
-        return f"<RemoteZulipServer {self.hostname} {self.uuid[0:12]}>"
+        return f"<RemoteZulipServer {self.hostname} {str(self.uuid)[0:12]}>"
 
     def format_requestor_for_logs(self) -> str:
-        return "zulip-server:" + self.uuid
+        return "zulip-server:" + str(self.uuid)
 
 
 class RemotePushDeviceToken(AbstractPushDeviceToken):
@@ -137,7 +145,7 @@ class RateLimitedRemoteZulipServer(RateLimitedObject):
         assert not settings.RUNNING_INSIDE_TORNADO
         assert settings.ZILENCER_ENABLED
 
-        self.uuid = remote_server.uuid
+        self.uuid = str(remote_server.uuid)
         self.domain = domain
         super().__init__()
 
